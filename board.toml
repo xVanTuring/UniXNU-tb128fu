@@ -1,0 +1,298 @@
+# Board description of the Lenovo Xiaoxin Pad 2022 (TB128FU, SM6225 bengal), read by the unixnu build driver.
+#
+# Prepared with the tablet under Android (TrebleDroid GSI, android-devinfo 2026-10-21). Nothing has been observed through
+# UniXNU on a TB128FU yet. The memory banks, [userdata] and every SoC address were read from the running device tree.
+
+[board]
+name = "tb128fu"
+soc = "SM6225"
+description = "Lenovo Xiaoxin Pad 2022 (TB128FU)"
+kit = "tb128fu"                    # a package/ of this repository would appear as kits/tb128fu in the build tree
+
+# The same target OS image as UniXNU-sheng: the unchanged iPad7,1 iPadOS 17.7.11 restore image.
+[ipsw]
+url = "https://updates.cdn-apple.com/2025SpringFCS/fullrestores/122-77166/DCA6CFE8-90E9-4B92-880D-3DE171798E40/iPad_Pro_HFR_17.7.11_21H461_Restore.ipsw"
+product = "iPad7,1"
+version = "17.7.11"
+build = "21H461"
+device_class = "j120ap"
+chip_id = 0x8011
+board_id = 12
+fetch = ["KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1,SystemTrustCache"]
+
+[ipsw.sha256]
+"044-76040-038.dmg" = "3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d"
+"044-76034-038.dmg" = "b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f"
+
+# Android's userdata (sda18 on the UFS LUN 0, 104.5 GiB), from the tablet's GPT, which agrees with sysfs. "unixnu build
+# userdata" writes the image for it; flashing it erases Android's data. The windows are those of UniXNU-sheng: the same
+# target image.
+[userdata]
+first_lba = 0x222f31
+last_lba = 0x1c457fa
+lba_bytes = 4096
+windows = [
+  { name = "OS", component = "OS" },
+  { name = "SystemOS", component = "Cryptex1,SystemOS" },
+]
+
+[kernel]
+defconfig = "tb128fu_defconfig"
+# Archive builders of the kernel step, in order; the ones tb128fu_defconfig links. build-arm-driver.py is the generic
+# driver builder of UniXNU-sheng.
+archives = [
+  "build-corecrypto-14.py",
+  "build-corecrypto-14.py --namespace",
+  "build-arm-driver.py ArmDTPlatform",
+  "build-arm-driver.py ArmCpu",
+  "build-arm-driver.py NativeAES",
+  "build-arm-driver.py NativeUfs --sm6225",
+  "build-arm-driver.py NativeVirtioBlock --verified-root",
+  "build-native-virtio-bindings.py --component NativeVirtioBlock --directory build/native-virtio-block-verified",
+  "build-arm-driver.py NativeRamBlock",
+  "build-native-virtio-bindings.py --component NativeRamBlock --directory build/native-ram-block",
+  "build-native-aes-bindings.py",
+  "build-libpthread-kernel.py",
+  "build-link-stubs.py",
+  "build-platform-power.py",
+  # The 395-byte owner root anchor and the XNU crypto adapter; the signed envelopes are in userdata,
+  # built with `unixnu build userdata --root-policy OS=... --root-policy SystemOS=...`.
+  "build-verified-root-key.py --pin 70a5ea346d2d779a7ef43eb4ed8b17f54488e160d8c2a6d6420969664e3ae798",
+  # The Adreno 610 half of NativeAdreno (no GMU) with the SMMU and PM4 kits (CONFIG_XNU_NATIVE_ADRENO), then the staged
+  # accelerator class added to the same archive.
+  "build-native-adreno-a6xx.py",
+  "build-native-adreno-accelerator.py",
+  # The display, key store stand-in and HID input (CONFIG_XNU_NATIVE_LEGACY_DISPLAY); it reads the previous kernel step's
+  # kernel.macho and UniXNU-qemu's display reference (see its header).
+  "build-native-legacy-display.py",
+]
+
+# The same original kernelcache and prelink selection as UniXNU-sheng: the target image is the same.
+[kernel.prelink]
+tool = "kits/NativePrelink/emit_prelink.py"
+kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
+kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7"
+slide = "-0x1000000"
+early_security_init = "com.apple.driver.AppleMobileFileIntegrity=0xfffffff005ab4ae0"
+roots = [
+  "com.apple.AppleFSCompression.AppleFSCompressionTypeZlib",
+  "com.apple.driver.AppleARMPlatform",
+  "com.apple.driver.AppleARMWatchdogTimer",
+  "com.apple.driver.AppleAudioClockLibs",
+  "com.apple.driver.AppleEffaceableStorage",
+  "com.apple.driver.AppleIISController",
+  "com.apple.driver.AppleM2ScalerCSCDriver",
+  "com.apple.driver.AppleMobileFileIntegrity",
+  "com.apple.driver.ApplePMGR",
+  "com.apple.driver.IODARTFamily",
+  "com.apple.filesystems.apfs",
+  "com.apple.iokit.CoreAnalyticsFamily",
+  "com.apple.iokit.IOAVFamily",
+  "com.apple.iokit.IOAudio2Family",
+  "com.apple.iokit.IOCECFamily",
+  "com.apple.iokit.IOCryptoAcceleratorFamily",
+  "com.apple.iokit.IOGPUFamily",
+  "com.apple.iokit.IOHDCPFamily",
+  "com.apple.iokit.IOMobileGraphicsFamily",
+  "com.apple.iokit.IOReportFamily",
+  "com.apple.iokit.IOSlowAdaptiveClockingFamily",
+  "com.apple.iokit.IOStorageFamily",
+  "com.apple.iokit.IOSurface",
+  "com.apple.kec.Libm",
+  "com.apple.kec.corecrypto",
+  "com.apple.kext.AppleMatch",
+  "com.apple.kext.CoreTrust",
+  "com.apple.security.AppleImage4",
+  "com.apple.security.sandbox",
+  "com.apple.iokit.IOHIDFamily",
+  "com.apple.iokit.IOHIDEventDriver",
+]
+
+# The firmware is the Mu-Silicium TB128FU port (tb128fuPkg, Divar SM6225) of the uefi-tb128fu checkout, with UniXNU,
+# the ramdisk block device driver and DarwinBoot added. The stock ABL carries one statically linked LinuxLoader PE
+# instead of separable vendor DXE modules, so the build uses the Mu driver set only (SimpleFbDxe on the ABL's
+# cont_splash_region); there is no Binaries/tb128fu.
+[firmware]
+config = "tb128fu"                 # Resources/Configs/tb128fu.toml in the Mu-Silicium checkout (--uefi or UNIXNU_UEFI)
+dsc = "Platforms/Lenovo/tb128fuPkg/tb128fu.dsc"
+fd = "Build/tb128fuPkg/{target}_CLANGPDB/FV/SILICIUM_UEFI.fd"
+preflight = ["scripts/check-tb128fu.py"]   # reads the checkout from UNIXNU_UEFI
+submodules = ["Binaries", "Common/Mu", "Common/Mu_OEM_Sample", "Silicium-ACPI", "Silicon/Silicium/OpensslPkg/Library/OpensslLib/openssl"]
+# Masks a GIC interrupt that has no handler instead of taking it forever (found on sheng with a leftover IPCC interrupt).
+patches = ["Resources/MuPatches/Gic-Spurious.patch"]
+packages = [
+  "{uefi}",
+  "{uefi}/Platforms/Lenovo",
+  "{uefi}/Platforms/Xiaomi",
+  "{tree}/package",
+  "{tree}/drivers/DarwinBoot",
+  "{edk2}",
+  "{uefi}/Common/Mu",
+  "{uefi}/Common/Mu_OEM_Sample",
+  "{uefi}/Silicon/Qualcomm",
+  "{uefi}/Silicon/Silicium",
+  "{uefi}/Silicium-ACPI",
+  "{uefi}/Silicium-ACPI/Platforms/Lenovo",
+  "{uefi}/Silicium-ACPI/Platforms/Xiaomi",
+  "{uefi}/Silicium-ACPI/Silicon/Qualcomm",
+]
+
+[firmware.defines]
+ENABLE_SECUREBOOT = "1"
+MEMORY_PROTECTION = "TRUE"
+SHIP_MODE = "FALSE"
+BUILDID_STRING = "tb128fu-research"
+
+# Image parameters come from Resources/Configs/tb128fu.toml of the checkout. Resources/DTBs/tb128fu.dtb carries
+# /reserved-memory/cont_splash_region@5c000000, so no [[bootimg.dtb_node]] is added.
+
+# The ramdisk of the boot image: a FAT volume with the UniXNU config, the kernel, its device tree and the optional
+# trust cache and Data seed. DarwinBoot is part of the firmware volume.
+#
+# The kernel is the one tb128fu_defconfig builds. It has no storage, Data or display driver yet, so the expected end is
+# the root mount, with the panic screen on the frame buffer.
+[payload]
+volume = "TB128FUESP"
+# The ABL's fastboot boot buffer is smaller than the 96 MiB boot_a partition:
+# 192 MiB and 89 MiB ramdisks both made `fastboot boot` return to fastboot,
+# while a 1.2 MiB image started. 56 MiB holds the 49.4 MiB kernel and its
+# sidecars with margin.
+size_mib = 56
+# UniXNU menu countdown. 10 s gave the first hardware test time to see the menu; during the reset-probe bisection it is
+# 2 s, because a probe reset boots the image again until slot a runs out of its 7 retries and ABL stops in fastboot.
+timeout = 2
+loader = "firmware"
+title = "tb128fu first boot: source 4K XNU to the panic screen"
+# The TB128FU /memory banks are 0x40000000+0x3cc00000, 0x80000000+0x40000000 and 0xc0000000+0x100000000. XNU takes
+# dram-base and dram-size as one range (is_dram_addr, which only picks the attribute of device mappings), so it spans
+# from 0x40000000 to the end of the last bank, across the 0x7cc00000..0x80000000 hole.
+dram_size = "0x180000000"
+skip_setup_tool = "scripts/seed-data-skip-setup.py"
+# No input device yet: without these SpringBoard preferences iPadOS turns the display off about 30 s after it starts and
+# puts the system to sleep, which ArmCpu does not support (as on UniXNU-qemu). A changed seed restarts the Data overlay.
+skip_setup_args = ["--no-auto-dim"]
+# The panic screen does not fit next to a stage 3/4 reset probe (0x45 bytes short): set it to false while
+# entry_probe_reset_delay is nonzero.
+panic_screen = true
+# Diagnostic: reset this many seconds after the MMU is enabled (stage 3). A reset proves the CPU got through the
+# MMU enable; no reset means it hangs there. 0/absent keeps --no-reset (stages 3 and 4 off).
+entry_probe_reset_delay = 0
+# Diagnostic: with a reset delay, reset after the Nth call to this symbol in entry_probe_reset_in (default _arm_init,
+# first call) instead of right after the MMU enable (stage 4 in place of stage 3). Bisects where the boot stops.
+entry_probe_reset_after = "_arm_vm_init"
+# true: reset at that call site instead, without making the call (did the boot reach it?).
+entry_probe_reset_before = false
+# The original static/System trust caches of the same IPSW, as accepted by UniXNU-sheng.
+trust_cache_sha256 = [
+  "7416ca4f8377146626bb284e2133c76bee6cb4e3ee0af5d648b186235a7323a7",
+  "8900d6a93d7a59ce1a872a5c081e559f4240a218f97e12d44d22dda46644d68f",
+]
+# The generic arguments of the sheng image that apply to this kernel. sheng-pmgr=2 publishes the original PMGR nub
+# through the bridge, which reads and writes no hardware. sheng-data-persist=2 keeps the 8 GiB packed Data seed writable
+# through the userdata store window (a seed above 2 GiB has no volatile backing).
+kernel_args = [
+  "-v",
+  "serial=3",
+  "debug=0x14e",
+  "kt_fixed_zones=120",
+  "armcpu-diagnostics=1",
+  # Every core sends itself SGI 0 from initCPU: XNU clears a core's SIGPdisabled only once that core has taken an IPI, and until
+  # then cpu_signal() skips it silently. Without it the kernel never sent one IPI (tb128fu-015..023: ipi=0 sent=0) while the
+  # cores took about 2 million virtual timer interrupts a second (tb128fu-023).
+  "armcpu-self-ipi=1",
+  # SGIs written to ICC_SGI1R_EL1 never arrive here either (tb128fu-024/025: 8 self-IPIs sent, none taken), as on sheng's SM8550:
+  # IPIs are software-pended SPIs instead, one per core. This GIC has 544 INTIDs (no 1008..1015) and the DT uses SPIs up to 429,
+  # so the IPIs are SPIs 504..511 = INTIDs 536..543.
+  "armcpu-spi-ipi=1",
+  "armcpu-spi-ipi-base=536",
+  # The DT timer node lists PPIs 1, 2, 3, 0 (secure physical, physical, virtual, hypervisor): XNU's EL1 virtual timer is INTID 19 on
+  # this SoC. ArmCpu took INTID 27 for it, which here is another source that stays asserted: tb128fu-024 counted 120-150 million
+  # "timer" interrupts per core in 420 s while XNU had its timer 111 s ahead, and TrustZone calls kept returning INTERRUPTED.
+  "armcpu-timer-intid=19",
+  "sheng-pmgr=2",
+  "-no_slto_panic",
+  "ml-timeout-lock-panic-scale=40",
+  # Publish the OS/SystemOS windows through the verified block path. The signed envelopes come from
+  # the userdata policy directory; diagnostics turn a refused policy into a screen report.
+  "native-ufs-root=1",
+  "native-ufs-diagnostics=1",
+  # The Data seed is larger than 2 GiB, so changed pages go through the store window after the root image.
+  "sheng-data-persist=2",
+  # Continuous on-screen bring-up page, tagged so a photograph says which image it is.
+  "boot-progress=2",
+  "sheng-build-tag=tb128fu-034",
+  # Adreno 610 bring-up (package/GpuProbe.cpp): snapshot, power at 320 MHz, read-only view of the GPU's SMMU (all passed in
+  # tb128fu-020), the TrustZone queries (tb128fu-021: SCM calls answer; IS_CALL_AVAIL(init_image) 1, PAS_IS_SUPPORTED(13) 0;
+  # XNU manages 0x8487c000-0x18487c000, so gpu_region@55615000 is outside it). Stages 5 and 6 (a hand-built SMMU bank, the first
+  # GPU command, the zap shader with CP_SET_SECURE_MODE(0)) passed in tb128fu-023..026; stage 7 does the same through
+  # NativeAdreno and publishes the GPU for user clients.
+  "tb128fu-gpu=7",
+  # No corpses for crashing processes (osfmk/corpses/corpse.c): without a GPU, iconservicesagent crashes in CoreImage over and
+  # over (tb128fu-017: 16 crashes in 420 s), and each corpse's vm_map_corpse_footprint_collect walked its whole map on this
+  # DEVELOPMENT kernel, half of all CPU samples; launchd's restarts took most of the rest. Our own [crashes] record does not
+  # depend on corpses.
+  "-no_corpses",
+  # SpringBoard's wait chain (traced with BootUiTraceProbe.c's boot-ui-focus* in tb128fu-012..014): SpringBoard -> chronod ->
+  # liveactivitiesd -> contextstored (CoreDuetContext, also identityservicesd's wait) -> locationd (CoreMotion's CLConnection).
+  # The same cycle of synchronous waits as on UniXNU-sheng's hardware (BootWatchdogPolicy.c): launchd is told not to start
+  # these jobs, so lookups of their Mach services fail instead of waiting. bluetoothd also restarted dozens of times in 013.
+  # With it the first frame is drawn at 132 s (tb128fu-015).
+  # tb128fu-019: PerfPowerServices (KeepAlive) exited with status 1 and was relaunched 143 times in 420 s, iomfb_fdr_loader
+  # (display factory calibration, not used by the firmware frame buffer) 49 times; launchd took most of the CPU samples.
+  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
+  # The touch controller (package/TouchProbe.cpp: Himax HX83102E on QUP SE0 SPI, the firmware loaded from the kernel): every
+  # stage up to reading reports and publishing them to NativeHidInput.
+  "tb128fu-touch=5",
+  # Ask both CPU frequency domains for their top level (CpuFreq.c).
+  "tb128fu-cpufreq=1",
+  # The display as on UniXNU-qemu: IOMobileGraphicsFamily loaded from bsd_init, NativeLegacyDisplay on the firmware frame
+  # buffer as the system display (phase 4), CPU presentation, the key store stand-in (liveactivitiesd's Keybag needs
+  # AppleKeyStore, or SpringBoard waits on chronod forever) and the HID input with a Home button.
+  "offline-mobile-graphics-load=1",
+  "offline-legacy-register=1",
+  "offline-legacy-phase=4",
+  "offline-legacy-gop=1",
+  "offline-legacy-unit-scale=1",
+  "offline-legacy-pm=1",
+  "offline-legacy-validate=1",
+  "offline-legacy-transfer=1",
+  "offline-legacy-cpu-present=1",
+  "offline-key-events=1",
+  "sheng-aks=1",
+  "offline-hid-input=1",
+  "offline-hid-home=1",
+  "sheng-touch-hid=1",
+  # Start the secondary CPUs listed in [payload.adt] cpu_regs (ArmCpu, PSCI CPU_ON).
+  "sheng-smp=1",
+  # Every 2 s the page text and the kernel message buffer go to the last 32 MiB of userdata (package/BootLog.c);
+  # scripts/read-tb128fu-log.py fetches them over USB with the Linux log reader (package/linux-log).
+  "sheng-log=1",
+  # After this much log time (and that round's log on the medium) the PM6125 PON reboot reason is set to bootloader and
+  # PSCI SYSTEM_RESET restarts into fastboot (package/BootReset.c; its read-only probe passed on 2026-10-22). At full CPU
+  # speed (tb128fu-013) launchd starts at 72 s and the process count settles near 180 by 115 s; the first frame comes at about
+  # 130 s, so 420 s leaves several minutes of the UI for touch tests.
+  "sheng-autoreset=420",
+  # The tablet has no backend for AppleARMWatchdogTimer: watchdogd trapped (brk #1 after an IOKit call) about
+  # 5 minutes into the first 4 GiB boot, and its exit is fatal. As on sheng, launchd is told not to start it.
+  "sheng-disable-watchdogd=1",
+]
+
+[payload.adt]
+tool = "scripts/make-tb128fu-adt.py"
+chip_id = "207"
+# 4 GiB, the iPad7,1's memory size (sheng, the board that runs iPadOS, owns 0x130000000). The firmware maps the free 0x80000000..0x1c0000000 run as one region. The first
+# boots used 2 GiB: iPadOS reached SpringBoard with 97 processes, but free memory fell to about 5 MiB.
+owned_memory_size = "0x100000000"
+root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"   # the OS volume of the same IPSW
+# All eight cores (boot CPU 0 first): 0..3 Cortex-A53 (Kryo Silver), 0x100..0x103 Cortex-A73. ArmCpu starts the
+# others with PSCI CPU_ON under sheng-smp=1; "0" keeps the boot CPU only.
+# Bisecting a stall with all eight (2026-10-22: every core reached step 7, but user space stopped at launchd): first one
+# more Cortex-A53 of the boot cluster (tb128fu-007: works, 84 processes at 181 s); then one Cortex-A73 (tb128fu-008:
+# no deadlock, but the root verification ran about 3x slower and launchd was still reading at 180 s, as with all eight;
+# the Cortex-A73 cluster is presumably left at a low clock without a CPU frequency driver). tb128fu-009: the four
+# Cortex-A53 work. tb128fu-012's CpuFreq.c read the Cortex-A73 domain at 300 MHz (and not enabled while its cluster was off),
+# the Cortex-A53s at 1516 MHz; with tb128fu-cpufreq=1 both ask for their top level, so all eight again.
+cpu_regs = "0,1,2,3,0x100,0x101,0x102,0x103"
+packed_data_ramdisk = true
+ipad_identity = true
+unique_chip_id = "required"          # the platform seed is not stored in any repository

@@ -1,0 +1,66 @@
+# Kernel configuration of the TB128FU image: the generic CPU, interrupt, timer and platform expert path, the source
+# corecrypto and pthread providers, NativeAES and the SM6225 UFS root with the owner root policy.
+# CONFIG_XNU_<NAME> becomes XNU_<NAME> for the kernel build.
+#
+# Still left out: SOURCE_MOCKFS (no fixture root).
+# SHENG_PMGR links the original-PMGR bridge (scripts/build-platform-power.py), without which the original AMFI
+# panics with "No PMGR". On the QEMU board the same kernel draws nothing through XNU's video console despite -v:
+# after the entry probe bars, the panic screen is the only kernel output on the frame buffer.
+
+CONFIG_XNU_SOURCE_CORECRYPTO14=y
+CONFIG_XNU_SOURCE_PTHREAD=y
+CONFIG_XNU_ARM_DT_PLATFORM=y
+CONFIG_XNU_ARMCPU=y
+CONFIG_XNU_NATIVE_AES=y
+# NativeUfs SM6225 block class with the VerifiedRoot owner policy. The kernel carries only the 395-byte
+# owner key (build/verified-root-key, pinned in [kernel] archives); the signed OS/SystemOS envelopes live
+# in the userdata policy directory (SHNGPOL1) and are read at run time. The static 70 MB bundle is not
+# linked, so the kernel stays in the 96 MiB boot partition.
+CONFIG_XNU_NATIVE_UFS=y
+# Verified variant: its root authorization query is what the owner chain below calls. No virtio device
+# exists on this board, so its own block transport never configures.
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK=y
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE="{tree}/build/native-virtio-block-verified/libNativeVirtioBlock.a"
+# The Data seed: a packed APFS scratch volume published as a RAM block device.
+CONFIG_XNU_NATIVE_RAM_BLOCK=y
+# Owner root chain, the same ladder as UniXNU-sheng: audit/trust the verified root, mount the SystemOS
+# cryptex as the cache carrier, publish the boot manifest, then mount the scratch Data volume.
+CONFIG_XNU_VERIFIED_ROOT_PROBE=y
+CONFIG_XNU_OWNER_ROOT_AUDIT=y
+CONFIG_XNU_OWNER_ROOT_TRUST=y
+CONFIG_XNU_OWNER_CACHE_MOUNT=y
+CONFIG_XNU_OWNER_CACHE_STARTUP=y
+CONFIG_XNU_OWNER_BOOT_MANIFEST=y
+CONFIG_XNU_OWNER_DATA_MOUNT=y
+CONFIG_XNU_OWNER_UNION_SYSTEMOS=y
+# The SystemOS volume of the signed policy and the Data seed volume of the payload.
+CONFIG_XNU_OWNER_CACHE_VOLUME_UUID="8846FE78-2910-4297-AF97-D59BB6F8FC16"
+CONFIG_XNU_OWNER_DATA_VOLUME_UUID="73F1FA24-4189-446D-96D4-FB6324EBE955"
+CONFIG_XNU_TRUST_CACHE_RUNTIME=y
+CONFIG_XNU_NATIVE_CS_HASH_CACHE=y
+CONFIG_XNU_DT_PANIC_REGION=y
+CONFIG_XNU_NATIVE_ARCH_TIMER=y
+# The SM6225 CPUs (Cortex-A73 0xd09, Kryo Silver 0x801) are ARMv8.0 and have no PAN: `msr PAN, #1` in arm_init is an
+# undefined instruction there and stopped the first boot before arm_vm_init. sheng (SM8550) sets it to y.
+CONFIG_XNU_NATIVE_PAN=n
+CONFIG_XNU_SHENG_PMGR=y
+# The on-screen bring-up page (MIT component of the sheng port). It draws arm_vm_init, bsd_init, root
+# authentication, SystemOS and Data mount stages on the firmware frame buffer; without a UART this is the
+# only live view of where a boot stops.
+CONFIG_XNU_BOOT_PROGRESS=y
+
+CONFIG_XNU_CRYPTO_BOOTSTRAP="prelinked"
+# Run the [kernel] archives of board.toml before the link (UniXNU 5e782ac: only a configuration that sets this runs them).
+CONFIG_XNU_BUILD_ARCHIVES=y
+# No-op hooks for probes of the left-out components (scripts/build-link-stubs.py). The verified root
+# archive is selected by CONFIG_XNU_VERIFIED_ROOT_PROBE and carries the key and crypto adapter.
+CONFIG_XNU_EXTRA_LD_ARCHIVES="{tree}/build/link-stubs/libLinkStubs.a"
+CONFIG_XNU_VERIFIED_ROOT_ARCHIVE="{tree}/build/verified-root-key/libVerifiedRootKey.a"
+CONFIG_XNU_NATIVE_MOBILE_DISPLAY=n
+CONFIG_XNU_ARMVIRT_PLATFORM=n
+# The display as on UniXNU-qemu: NativeLegacyDisplay (a subclass of the original IOMobileFramebufferLegacy) on the firmware
+# frame buffer, QuartzCore's CPU renderer, the key store stand-in and the HID input (scripts/build-native-legacy-display.py).
+CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
+# The Adreno 610 half of NativeAdreno (scripts/build-native-adreno-a6xx.py): no personality; the board's GPU probe
+# (tb128fu-gpu=7) brings the context up, publishes the GPU and the staged accelerator.
+CONFIG_XNU_NATIVE_ADRENO=y
