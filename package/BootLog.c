@@ -92,6 +92,30 @@ struct native_adreno_client_record {char name[20]; uint32_t opens, refused, clos
 extern struct native_adreno_client_record native_adreno_client_log[8] __attribute__((weak_import));
 struct native_adreno_asker_record {char name[20]; uint32_t reads;};
 extern struct native_adreno_asker_record native_adreno_metal_askers[12] __attribute__((weak_import));
+// The Metal plugin as NativeAdreno saw it (NativeAdrenoPublish.cpp NativeAdrenoMetalDiag, the prefix up to report2) and the newest
+// IOServiceOpen attempts of the accelerator.
+struct native_adreno_metal_diag_view {
+  uint32_t opens, busy, bad, closes, reports, property_reads, foreign_opens, foreign_type, name_reads, calls, last_selector, last_status,
+      ext_entries, ext_selector, ext_status, ext_in, ext_out, tunnel_calls, probes, sel_bits[8], mb_maps, mb_calls, marks_total, marks[16],
+      chk_macf, chk_res, chk_type, type_pass_lo, type_pass_hi, attach_status, inflight, inflight_since_calls, forced_unmaps;
+  char opener[3][17], reader[3][17], name_reader[17], starter[3][17], report[64], report2[64];
+};
+extern struct native_adreno_metal_diag_view native_adreno_metal_diag __attribute__((weak_import));
+struct native_adreno_open_record {char name[20]; uint32_t type, macf, res, attach, foreign;};
+extern struct native_adreno_open_record native_adreno_open_log[8] __attribute__((weak_import));
+extern volatile uint32_t native_adreno_open_log_count __attribute__((weak_import));
+// The GPU addon of the payload (patches/xnu/zzy-native-gpu-addon-mount.patch).
+extern volatile int native_gpu_addon_files __attribute__((weak_import)), native_gpu_addon_written __attribute__((weak_import)),
+    native_gpu_addon_same __attribute__((weak_import)), native_gpu_addon_failed __attribute__((weak_import)),
+    native_gpu_addon_error __attribute__((weak_import));
+extern volatile int native_gpu_addon_stage __attribute__((weak_import)), native_gpu_addon_status __attribute__((weak_import)),
+    native_gpu_addon2_stage __attribute__((weak_import)), native_gpu_addon2_status __attribute__((weak_import)),
+    native_gpu_addon3_stage __attribute__((weak_import)), native_gpu_addon3_status __attribute__((weak_import));
+// Native 4K code-signature hashes derived from the original 16K ones (patches/xnu/native-4k-signature-hash-cache.patch): files
+// prepared, 16K blocks verified, bytes read, ticks in the reads and in the hashing.
+extern unsigned long cs_native4k_ready_blobs __attribute__((weak_import)), cs_native4k_full_blocks __attribute__((weak_import));
+extern uint64_t cs_native4k_bytes __attribute__((weak_import)), cs_native4k_read_ticks __attribute__((weak_import)),
+    cs_native4k_hash_ticks __attribute__((weak_import));
 extern char native_gpu_coherence_row[120] __attribute__((weak_import));
 extern size_t boot_progress_profile_rows(char *, size_t) __attribute__((weak_import));
 extern volatile uint64_t native_gpu_idle_sleeps __attribute__((weak_import));
@@ -406,6 +430,51 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     size_t used = (size_t)snprintf(row, sizeof row, "[metal askers]");
     for (unsigned i = 0; i < 12 && native_adreno_metal_askers[i].name[0] && used < sizeof row; ++i)
       used += (size_t)snprintf(row + used, sizeof row - used, " %.19s:%u", native_adreno_metal_askers[i].name, native_adreno_metal_askers[i].reads);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // The GPU addon: files in the payload's addon, written to Data, already there unchanged, failed, first error; the three overlay
+  // mounts as stage.status (5 = mounted and our own file visible).
+  if (&native_gpu_addon_files) {
+    char row[200];
+    snprintf(row, sizeof row, "[gpu addon] files=%d written=%d same=%d failed=%d error=%d | mounts %d.%x %d.%x %d.%x",
+             native_gpu_addon_files, native_gpu_addon_written, native_gpu_addon_same, native_gpu_addon_failed, native_gpu_addon_error,
+             native_gpu_addon_stage, (unsigned)native_gpu_addon_status, native_gpu_addon2_stage, (unsigned)native_gpu_addon2_status,
+             native_gpu_addon3_stage, (unsigned)native_gpu_addon3_status);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // The plugin: opens granted/busy/bad/closed, MetalPluginName reads, opens of other types (count/last type), the process that sent
+  // marker 1, and its progress markers, oldest first (1 started, 2 symbols, 3 opened, 4xxx a step failed with status xxx).
+  if (&native_adreno_metal_diag) {
+    const struct native_adreno_metal_diag_view *d = &native_adreno_metal_diag;
+    const unsigned total = d->marks_total, shown = total < 8 ? total : 8;
+    char row[300];
+    size_t used = (size_t)snprintf(row, sizeof row, "[metal plugin] opens=%u busy=%u bad=%u closes=%u names=%u foreign=%u/%x starter=%.16s marks=%u:",
+                                   d->opens, d->busy, d->bad, d->closes, d->name_reads, d->foreign_opens, d->foreign_type, d->starter[0], total);
+    for (unsigned i = 0; i < shown && used < sizeof row; ++i)
+      used += (size_t)snprintf(row + used, sizeof row - used, " %x", d->marks[(total - shown + i) & 15]);
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // The newest IOServiceOpen attempts, newest first: process, type, MACF open check and sandbox filter (0 = admitted), attach, F = not the plugin type.
+  if (&native_adreno_open_log_count && native_adreno_open_log_count) {
+    const unsigned count = native_adreno_open_log_count, shown = count < 4 ? count : 4;
+    char row[300];
+    size_t used = (size_t)snprintf(row, sizeof row, "[gpu opens] %u:", count);
+    for (unsigned i = 0; i < shown && used < sizeof row; ++i) {
+      const struct native_adreno_open_record *r = &native_adreno_open_log[(count - 1 - i) & 7];
+      used += (size_t)snprintf(row + used, sizeof row - used, " %.16s t%x m%x r%x a%x%s", r->name, r->type, r->macf, r->res, r->attach,
+                               r->foreign ? " F" : "");
+    }
+    at = put(out, at, cap, row, sizeof row);
+  }
+  // What launchd's first 40 s go to: the dyld shared cache (3 GB) is read and hashed whole when its signature is added.
+  if (&cs_native4k_read_ticks) {
+    uint64_t read_ns = 0, hash_ns = 0;
+    absolutetime_to_nanoseconds(cs_native4k_read_ticks, &read_ns);
+    absolutetime_to_nanoseconds(cs_native4k_hash_ticks, &hash_ns);
+    char row[160];
+    snprintf(row, sizeof row, "[cs native4k] files=%lu blocks16k=%lu MiB=%llu read_ms=%llu hash_ms=%llu", cs_native4k_ready_blobs,
+             cs_native4k_full_blocks, (unsigned long long)(cs_native4k_bytes >> 20), (unsigned long long)(read_ns / 1000000),
+             (unsigned long long)(hash_ns / 1000000));
     at = put(out, at, cap, row, sizeof row);
   }
   // The IO-coherence proof (GpuPowerProbe coherenceProbe) and the maintenance passes it saved: map, unmap, submission, completion.
