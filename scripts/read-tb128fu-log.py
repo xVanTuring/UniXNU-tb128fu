@@ -19,20 +19,33 @@ from pathlib import Path
 UNIXNU = Path(__file__).resolve().parents[2] / 'UniXNU'
 # The window has the sheng format (package/BootLog.c is the sheng writer); its decoder needs Python 3.12 or later.
 DECODER = Path(__file__).resolve().parents[2] / 'UniXNU-sheng/scripts/read-sheng-log.py'
-# The tablet's fastboot serial (TB128FU_SERIAL); without it, any device in fastboot counts.
+# The tablet's fastboot serial (TB128FU_SERIAL); without it, the only device in fastboot counts, and two or more are refused.
 SERIAL = os.environ.get('TB128FU_SERIAL', '')
 
 
-def in_fastboot():
+def fastboot_serials():
     out = subprocess.run(['fastboot', 'devices'], capture_output=True, text=True).stdout
-    return any(line.split()[0] == SERIAL if SERIAL else line.strip().endswith('fastboot')
-               for line in out.splitlines() if line.strip())
+    return [line.split()[0] for line in out.splitlines() if line.strip().endswith('fastboot')]
+
+
+def in_fastboot():
+    serials = fastboot_serials()
+    return SERIAL in serials if SERIAL else len(serials) == 1
+
+
+def fastboot(*args):
+    return ['fastboot'] + (['-s', SERIAL] if SERIAL else []) + list(args)
 
 
 def find_volume():
+    """Only this reader's disk: another tablet's reader (pipa, 2026-10-22) offered a volume of the same name at the same time and
+    each script copied and ejected the other one's. STATUS.TXT names the reader on its first line."""
     for volume in sorted(glob.glob('/Volumes/UNIXNULOG*')):
-        if os.path.isfile(os.path.join(volume, 'LOG.BIN')) and os.path.isfile(os.path.join(volume, 'STATUS.TXT')):
-            return volume
+        status = os.path.join(volume, 'STATUS.TXT')
+        if os.path.isfile(os.path.join(volume, 'LOG.BIN')) and os.path.isfile(status):
+            with open(status, errors='replace') as f:
+                if f.readline().strip() == 'tb128fu log reader':
+                    return volume
     return None
 
 
@@ -66,10 +79,12 @@ def main():
     if find_volume():
         sys.exit('a UNIXNULOG volume is already mounted; eject it first')
     if not a.no_boot:
+        if not SERIAL and len(fastboot_serials()) > 1:
+            sys.exit('more than one device in fastboot; set TB128FU_SERIAL')
         if not in_fastboot():
             sys.exit('the tablet is not in fastboot')
-        print(f'fastboot boot {a.reader}')
-        subprocess.run(['fastboot', 'boot', str(a.reader)], check=True)
+        print(' '.join(fastboot('boot', str(a.reader))))
+        subprocess.run(fastboot('boot', str(a.reader)), check=True)
     start = time.time()
     volume = None
     while time.time() - start < a.wait:
