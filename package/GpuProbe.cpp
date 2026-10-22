@@ -1143,11 +1143,44 @@ bool naMetal(Session &s) {
     return true;
 }
 
+// Where the CP stands when it stops moving. Fence wait timeouts do not tell: in tb128fu-039 the render server's 2369 were polls
+// (all waits together took 0.5 s) and every command buffer completed within 190 ms. Rows 8 and 9 belong to stages 5 and 6 and are
+// free from stage 7 on. Once the ring is not drained and RPTR, IB1 base and IB1 remaining dwords are the same as one beat (2 s)
+// before, row 8 is refreshed every such beat: seconds, RBBM_STATUS..STATUS3 (0x210..0x213; STATUS3 bit 24
+// SMMU stalled on a fault), CP_RB_RPTR/WPTR (0x806/0x807), IB1 and IB2 base and remaining dwords (0x928/0x92a, 0x92b/0x92d),
+// CP_HW_FAULT 0x821, CP_INTERRUPT_STATUS 0x823, CP_PROTECT_STATUS 0x824. Row 9: the SQE PC and the header of the packet it is on
+// (CP_SQE_STAT_ADDR 0x908 = 0, then CP_SQE_STAT_DATA 0x909 twice, as crashdec reads them), context bank 0 FSR, FAR, FSYNR0, and
+// the IB1/IB2 position of the first beat that saw the stall, so two log periods tell a stuck CP from a slow one.
+void naHangRows(const Session &s, unsigned t) {
+    static unsigned firstT;
+    static uint64_t firstIb1, firstIb2;
+    static uint32_t firstRem1, firstRem2;
+    static bool seen;
+    const uint64_t ib1 = gr(s, 0x928) | uint64_t(gr(s, 0x929)) << 32, ib2 = gr(s, 0x92b) | uint64_t(gr(s, 0x92c)) << 32;
+    const uint32_t rem1 = gr(s, 0x92a), rem2 = gr(s, 0x92d);
+    if (!seen) {seen = true; firstT = t; firstIb1 = ib1; firstIb2 = ib2; firstRem1 = rem1; firstRem2 = rem2;}
+    snprintf(tb128fu_gpu_rows[8], sizeof tb128fu_gpu_rows[8],
+        "GPU hang t%u st%08x %x/%x/%x r%x/%x | ib1 %llx+%x ib2 %llx+%x | hw%x cpi%x prot%x", t, gr(s, 0x210), gr(s, 0x211),
+        gr(s, 0x212), gr(s, 0x213), gr(s, 0x806), gr(s, 0x807), (unsigned long long)ib1, rem1, (unsigned long long)ib2, rem2,
+        gr(s, 0x821), gr(s, 0x823), gr(s, 0x824));
+    gw(s, 0x908, 0);
+    const uint32_t pc = gr(s, 0x909), op = gr(s, 0x909);
+    const uint64_t far = rd(s.smmu, kCb0 + kCbFar) | uint64_t(rd(s.smmu, kCb0 + kCbFar + 4)) << 32;
+    snprintf(tb128fu_gpu_rows[9], sizeof tb128fu_gpu_rows[9],
+        "GPU hang sqe pc%x op%08x | fsr%x far%llx fsynr%x | first t%u ib1 %llx+%x ib2 %llx+%x", pc, op,
+        rd(s.smmu, kCb0 + kCbFsr), (unsigned long long)far, rd(s.smmu, kCb0 + 0x68), firstT, (unsigned long long)firstIb1,
+        firstRem1, (unsigned long long)firstIb2, firstRem2);
+}
+
 // Row 14, refreshed every 2 s once the device is published: interrupts (count, last status, all seen, masked), fence waits
 // that slept or spun, submissions (submitted, completed, timeouts), user clients opened/closed, BO pool use.
 [[noreturn]] void naHeartbeat(Session &s) {
-    for (;;) {
+    uint32_t lastRptr = ~0u, lastIb1 = ~0u, lastRem1 = ~0u;
+    for (unsigned t = 0;; t += 2) {
         const NativeAdrenoSubmitStats st = gSubmit->stats();
+        const uint32_t rptr = gr(s, 0x806), ib1 = gr(s, 0x928), rem1 = gr(s, 0x92a);
+        if (rptr != gr(s, 0x807) && rptr == lastRptr && ib1 == lastIb1 && rem1 == lastRem1) naHangRows(s, t);
+        lastRptr = rptr; lastIb1 = ib1; lastRem1 = rem1;
         uint32_t closed = 0;
         const uint32_t opened = native_adreno_publish_stats(&closed);
         snprintf(tb128fu_gpu_rows[14], sizeof tb128fu_gpu_rows[14],
@@ -1156,7 +1189,6 @@ bool naMetal(Session &s) {
             (unsigned long long)native_gpu_idle_spins,
             st.submissions, st.completed, st.timeouts, st.poisoned_jobs, opened, closed, native_adreno_pool_stats[3],
             native_adreno_pool_stats[0], native_adreno_pool_stats[2], native_adreno_pool_stats[5]);
-        (void)s;
         IOSleep(2000);
     }
 }
