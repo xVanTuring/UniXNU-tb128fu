@@ -220,7 +220,7 @@ kernel_args = [
   "sheng-data-persist=2",
   # Continuous on-screen bring-up page, tagged so a photograph says which image it is.
   "boot-progress=2",
-  "sheng-build-tag=tb128fu-034",
+  "sheng-build-tag=tb128fu-035",
   # Adreno 610 bring-up (package/GpuProbe.cpp): snapshot, power at 320 MHz, read-only view of the GPU's SMMU (all passed in
   # tb128fu-020), the TrustZone queries (tb128fu-021: SCM calls answer; IS_CALL_AVAIL(init_image) 1, PAS_IS_SUPPORTED(13) 0;
   # XNU manages 0x8487c000-0x18487c000, so gpu_region@55615000 is outside it). Stages 5 and 6 (a hand-built SMMU bank, the first
@@ -239,7 +239,11 @@ kernel_args = [
   # With it the first frame is drawn at 132 s (tb128fu-015).
   # tb128fu-019: PerfPowerServices (KeepAlive) exited with status 1 and was relaunched 143 times in 420 s, iomfb_fdr_loader
   # (display factory calibration, not used by the firmware frame buffer) 49 times; launchd took most of the CPU samples.
-  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
+  # tb128fu-034: iconservicesagent crashed 14 times (as in 017, CoreImage +0x1b0ac4 called through IconServices, IconFoundation and
+  # CoreUI). Without a Metal device CoreImage takes its OpenGL ES path, and the GL dispatch it calls (glDisable of DEPTH_TEST,
+  # SCISSOR_TEST, DITHER, CULL_FACE) is empty here. It runs only when icons must be rendered; disabled, as UniXNU-sheng's
+  # skip-setup guide does, until the Metal user space exists. Icons missing from the cache then stay blank.
+  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader,com.apple.iconservices.iconservicesagent",
   # The touch controller (package/TouchProbe.cpp: Himax HX83102E on QUP SE0 SPI, the firmware loaded from the kernel): every
   # stage up to reading reports and publishing them to NativeHidInput.
   "tb128fu-touch=5",
