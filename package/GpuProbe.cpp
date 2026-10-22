@@ -44,6 +44,10 @@
 
 extern "C" {
 char tb128fu_gpu_rows[16][120];
+// Stage 9 (dvfsPrepare): the RPM votes, the memory copy rate before and after the DDR vote, and the GPU clock chosen.
+char tb128fu_gpu_dvfs[120];
+int tb128fu_rpm_open(void);
+int tb128fu_rpm_request(uint32_t set, uint32_t type, uint32_t id, uint32_t key, uint32_t value);
 volatile unsigned tb128fu_gpu_stage_req, tb128fu_gpu_stage_done, tb128fu_gpu_step;
 volatile int tb128fu_gpu_error;
 // Fence waits that slept until a GPU interrupt or spun (the boot log's GPU rows read these names).
@@ -96,6 +100,9 @@ constexpr uint32_t kGxBcr = 0x1008, kGxGdscr = 0x100c, kGfxCmd = 0x101c, kGfxCfg
 // GPU registers (dword offsets of a6xx_reg.h, times 4).
 constexpr uint32_t kRbbmStatus = 0x210 * 4, kRbbmInt0Status = 0x201 * 4, kCpSqeCntl = 0x808 * 4, kAlwaysOnLo = 0x980 * 4,
                    kAlwaysOnHi = 0x981 * 4;
+
+// PLL0's L and alpha: 640 MHz (gfx3d 320 MHz) unless stage 9's votes allow more.
+uint32_t gPllL = 0x21, gPllAlpha = 0x5555;
 
 struct Region {OSSharedPtr<IOMemoryMap> keep; uintptr_t va = 0;};
 bool mapRegion(uint64_t phys, uint64_t length, Region &region) {
@@ -291,11 +298,12 @@ bool powerOn(Session &s) {
     IODelay(1);
     if (!poll(c, kGxGdscr, 1u << 31, 1u << 31, 500)) {fail(23, -110); readGpucc(s); return false;}
     IODelay(2);
-    // PLL0 (Zonda) at 640 MHz: configure (clk_zonda_pll_configure), then enable (clk_zonda_pll_enable).
+    // PLL0 (Zonda) at 640 MHz, or at twice the clock stage 9 chose (dvfsPrepare): configure (clk_zonda_pll_configure), then
+    // enable (clk_zonda_pll_enable).
     mark(s, 24);
     if (rd(c, kPllMode) & (1u << 20)) {fail(24, -16); readGpucc(s); return false;}   // in FSM vote mode: not ours to drive
-    wr(c, kPllL, 0x21);
-    wr(c, kPllAlpha, 0x5555);
+    wr(c, kPllL, gPllL);
+    wr(c, kPllAlpha, gPllAlpha);
     wr(c, kPllConfig, 0x08200800);
     wr(c, kPllConfigU, 0x05022001);
     wr(c, kPllConfigU1, 0x00000010);
@@ -1192,6 +1200,48 @@ void naHangRows(const Session &s, unsigned t) {
         IOSleep(2000);
     }
 }
+
+// MiB/s of a cached copy, 8 MiB eight times: what the DDR vote changes, if the RPM honours it.
+unsigned copyRate() {
+    constexpr size_t kHalf = 8u << 20;
+    uint8_t *buffer = static_cast<uint8_t *>(IOMallocAligned(2 * kHalf, 1u << 14));
+    if (!buffer) return 0;
+    memset(buffer, 0x5a, 2 * kHalf);
+    uint64_t start, end;
+    __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(start));
+    for (unsigned i = 0; i < 8; ++i) memcpy(buffer + (i & 1 ? 0 : kHalf), buffer + (i & 1 ? kHalf : 0), kHalf);
+    __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(end));
+    IOFreeAligned(buffer, 2 * kHalf);
+    return end > start ? unsigned((uint64_t(8) * kHalf * 19200000ull / (end - start)) >> 20) : 0;
+}
+
+// Stage 9: votes through the RPM (RpmGlink.cpp) before the GPU is powered, so PLL0 can start at twice 785 MHz (gpucc-khaje.c:
+// 785 MHz needs CX at NOM, its 1570 MHz VCO needs MX only at LOW_SVS, below what MX runs at anyway). The votes only go up: CX
+// at TURBO (one level above what 785 MHz needs, and above any level the boot loader's APPS vote would have asked for the display),
+// the DDR clock at the highest rate in the active and sleep sets. MX is left alone: the boot loader's vote stays in force. Any
+// failure keeps 320 MHz. The RPM's clock scaling switch ("clk0" 2 "Enab") is not touched: Linux first votes every RPM clock to its
+// maximum before turning it on, else the RPM may slow the buses nobody voted for.
+void dvfsPrepare() {
+    constexpr uint32_t kRwcx = 0x78637772, kClk2 = 0x326b6c63, kSwen = 0x6e657773, kVlvl = 0x6c766c76, kKhz = 0x007a484b;
+    constexpr uint32_t kCxTurbo = 0x180, kDdrMax = 0x7fffffff;
+    const unsigned before = copyRate();
+    const int open = tb128fu_rpm_open();
+    int swen = 1, cxActive = 1, cxSleep = 1, ddrActive = 1, ddrSleep = 1;
+    if (!open) {
+        swen = tb128fu_rpm_request(0, kRwcx, 0, kSwen, 1);
+        cxActive = tb128fu_rpm_request(0, kRwcx, 0, kVlvl, kCxTurbo);
+        cxSleep = tb128fu_rpm_request(1, kRwcx, 0, kVlvl, kCxTurbo);
+        ddrActive = tb128fu_rpm_request(0, kClk2, 0, kKhz, kDdrMax);
+        ddrSleep = tb128fu_rpm_request(1, kClk2, 0, kKhz, kDdrMax);
+        IOSleep(10);
+    }
+    const unsigned after = copyRate();
+    const bool raise = !open && !swen && !cxActive && !cxSleep;
+    if (raise) {gPllL = 0x52; gPllAlpha = 0xc556;}   // 1570 MHz: 19.2 MHz x (0x52 - 0x3aaa/65536), the alpha is signed
+    snprintf(tb128fu_gpu_dvfs, sizeof tb128fu_gpu_dvfs,
+        "GPU dvfs open %d | cx swen %d act %d sleep %d | ddr act %d sleep %d | copy %u -> %u MiB/s | gfx3d %u MHz L%x a%x",
+        open, swen, cxActive, cxSleep, ddrActive, ddrSleep, before, after, raise ? 785 : 320, gPllL, gPllAlpha);
+}
 }  // namespace
 
 static void gpuThread(void *, wait_result_t) {
@@ -1204,6 +1254,7 @@ static void gpuThread(void *, wait_result_t) {
         tb128fu_gpu_stage_done = 1;
         rows(*s);
         if (stage < 2) break;
+        if (stage >= 9) dvfsPrepare();
         if (!powerOn(*s)) break;
         tb128fu_gpu_stage_done = 2;
         rows(*s);
@@ -1239,7 +1290,7 @@ static void gpuThread(void *, wait_result_t) {
 extern "C" void tb128fu_gpu_probe(void) {
     unsigned stage = 0;
     if (!PE_parse_boot_argn("tb128fu-gpu", &stage, sizeof stage) || stage < 1 || tb128fu_gpu_stage_req) return;
-    if (stage > 8) stage = 8;
+    if (stage > 9) stage = 9;
     tb128fu_gpu_stage_req = stage;
     thread_t thread = nullptr;
     if (kernel_thread_start(gpuThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
