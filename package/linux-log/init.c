@@ -206,6 +206,8 @@ static long open_partition(const char *name, char *part, unsigned long cap)
   return open_node(part, ORdonly, 060000);
 }
 
+static unsigned long userdata_blocks;   // set by copy_log, used by copy_export
+
 static long copy_log(unsigned long log_off, unsigned long log_bytes)
 {
   static char buf[CHUNK];
@@ -217,6 +219,7 @@ static long copy_log(unsigned long log_off, unsigned long log_bytes)
   if (read_file(path, size, sizeof(size)) <= 0) { sys(SysClose, dev, 0, 0, 0, 0); return -5; }
   const char *p = size;
   unsigned long blocks = parse_num(&p) / (BLOCK / 512);
+  userdata_blocks = blocks;
   put("userdata_blocks="); put_num(blocks); put("\n");
   if (blocks < LOG_BLOCKS || log_bytes != (unsigned long)LOG_BLOCKS * BLOCK) { sys(SysClose, dev, 0, 0, 0, 0); return -22; }
   unsigned long first = (blocks - LOG_BLOCKS) * BLOCK;
@@ -234,6 +237,35 @@ static long copy_log(unsigned long log_off, unsigned long log_bytes)
 
 static unsigned long rd32(const unsigned char *p) { return p[0] | p[1] << 8 | p[2] << 16 | (unsigned long)p[3] << 24; }
 static unsigned long rd64(const unsigned char *p) { return rd32(p) | rd32(p + 4) << 32; }
+
+// The log's export (package/BootLog.c, header version 3): the newest complete blob user space handed the log writer, export_bytes
+// long at block export_first of the region that ends where the log window starts (export_below blocks long, NativeUfs
+// kExportBlocks). Copied into EXPORT.BIN, at most its size; the header's values go to STATUS.TXT and the step reports the bytes
+// copied. Reads the header from the window copy in LOG.BIN, so copy_log comes first.
+static unsigned long export_off, export_cap;
+static long copy_export(unsigned long log_off)
+{
+  static unsigned char head[BLOCK];
+  static char buf[CHUNK];
+  if (sys(SysPread64, image, (long)head, BLOCK, (long)log_off, 0) != BLOCK) return -5;
+  if (memcmp_n(head, "SHLOG001", 8) || rd32(head + 8) < 3 || rd32(head + 12) < 140) return -22;
+  unsigned long first = rd32(head + 120), bytes = rd32(head + 128), below = rd32(head + 136);
+  put("export_bytes="); put_num(bytes); put(" export_first="); put_num(first); put(" export_below="); put_num(below); put("\n");
+  if (!bytes) return 0;
+  if (userdata_blocks < LOG_BLOCKS || below > userdata_blocks - LOG_BLOCKS || first >= below) return -22;
+  unsigned long from = (userdata_blocks - LOG_BLOCKS - below + first) * BLOCK, n = bytes < export_cap ? bytes : export_cap;
+  char part[64];
+  long dev = open_partition("userdata", part, sizeof(part));
+  if (dev < 0) return dev;
+  for (unsigned long done = 0; done < n; done += CHUNK) {   // export_cap is a whole number of chunks
+    long r = sys(SysPread64, dev, (long)buf, CHUNK, (long)(from + done), 0);
+    if (r != CHUNK) { sys(SysClose, dev, 0, 0, 0, 0); return r < 0 ? r : -5; }
+    r = sys(SysPwrite64, image, (long)buf, CHUNK, (long)(export_off + done), 0);
+    if (r != CHUNK) { sys(SysClose, dev, 0, 0, 0, 0); return r < 0 ? r : -5; }
+  }
+  sys(SysClose, dev, 0, 0, 0, 0);
+  return (long)n;
+}
 
 // Android dynamic partitions (liblp, metadata_format.h): the geometry is at byte 4096 of super, slot 0's primary metadata at
 // 4096 + 2 * 4096. Finds partition NAME and returns its byte offset and size in super if it is one linear extent on super
@@ -441,14 +473,15 @@ __attribute__((noreturn)) void start(void)
   long sysfs = sys(SysMount, (long)"sysfs", (long)"/sys", (long)"sysfs", 0, 0);
   long cfs = sys(SysMount, (long)"configfs", (long)"/sys/kernel/config", (long)"configfs", 0, 0);
 
-  // /log.offsets (build-log-reader.py): byte offset and size of LOG.BIN, then of STATUS.TXT and, with --vendor-file, of
-  // FIRMWARE.BIN inside /log.img.
-  char spec[128];
+  // /log.offsets (build-log-reader.py): byte offset and size of LOG.BIN, then of STATUS.TXT, of FIRMWARE.BIN (0 0 without
+  // --vendor-file) and of EXPORT.BIN inside /log.img.
+  char spec[160];
   read_file("/log.offsets", spec, sizeof(spec));
   const char *p = spec;
   unsigned long log_off = parse_num(&p), log_bytes = parse_num(&p);
   status_off = parse_num(&p); status_cap = parse_num(&p);
   fw_off = parse_num(&p); fw_cap = parse_num(&p);
+  export_off = parse_num(&p); export_cap = parse_num(&p);
   image = (int)sys(SysOpenat, AtFdcwd, (long)"/log.img", ORdwr, 0, 0);
 
   char release[160];
@@ -464,6 +497,7 @@ __attribute__((noreturn)) void start(void)
   step("mount.configfs", cfs);
   step("image.open", image);
   step("log.copy", copy_log(log_off, log_bytes));
+  if (export_cap) step("export.copy", copy_export(log_off));
   if (fw_cap) step("vendor.copy", copy_vendor());
   step("gadget", gadget());
 

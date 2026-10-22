@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Build the fastboot-boot-only TB128FU log reader: the tablet's own Android boot image (header v2; kernel and device tree section
 reused byte for byte) with its ramdisk replaced by an initramfs holding init (init.c next to this file, static and libc-free), a FAT
-image with LOG.BIN (32 MiB) and STATUS.TXT, and /log.offsets, where those two files' data lie inside the image. The reader offers
-the image to the host as a read-only USB disk and restarts into fastboot when the host ejects it (scripts/read-tb128fu-log.py).
-With --vendor-file, the image also has FIRMWARE.BIN (2 MiB) and the initramfs /vendor.list: init copies those files of the stock
-vendor partition (read only, through the super partition's metadata and a loop device) into it.
+image with LOG.BIN (32 MiB), STATUS.TXT and EXPORT.BIN (32 MiB), and /log.offsets, where those files' data lie inside the image.
+EXPORT.BIN takes the log's newest complete export (the render server's pipeline-cache directory, in the region below the log window).
+The reader offers the image to the host as a read-only USB disk and restarts into fastboot when the host ejects it
+(scripts/read-tb128fu-log.py). With --vendor-file, the image also has FIRMWARE.BIN (2 MiB) and the initramfs /vendor.list: init
+copies those files of the stock vendor partition (read only, through the super partition's metadata and a loop device) into it.
 
 usage: build-log-reader.py --boot boot_a.img --out reader.img [--vendor-partition vendor_a] [--vendor-file firmware/NAME ...]"""
 import argparse
@@ -22,7 +23,8 @@ LLVM = Path('/opt/homebrew/opt/llvm/bin')
 LOG_BYTES = 8192 * 4096
 STATUS_BYTES = 4096
 FIRMWARE_BYTES = 2 * 1024 * 1024
-IMAGE_SECTORS = 34 * 2048          # 34 MiB: LOG.BIN, STATUS.TXT and the FAT16 metadata (2 MiB more with FIRMWARE.BIN)
+EXPORT_BYTES = 32 * 1024 * 1024    # tb128fu-039's export was 9.3 MB; init copies at most this much and reports the true size
+IMAGE_SECTORS = 66 * 2048          # 66 MiB: LOG.BIN, STATUS.TXT, EXPORT.BIN and the FAT16 metadata (2 MiB more with FIRMWARE.BIN)
 VOLUME = 'UNIXNULOG'
 
 
@@ -81,7 +83,8 @@ def build_image(work, firmware):
                    env=env, check=True)
     (work / 'LOG.BIN').write_bytes(b'\0' * LOG_BYTES)
     (work / 'STATUS.TXT').write_bytes(b' ' * (STATUS_BYTES - 1) + b'\n')
-    names = ['LOG.BIN', 'STATUS.TXT']
+    (work / 'EXPORT.BIN').write_bytes(b'\0' * EXPORT_BYTES)
+    names = ['LOG.BIN', 'STATUS.TXT', 'EXPORT.BIN']
     if firmware:
         (work / 'FIRMWARE.BIN').write_bytes(b'\0' * FIRMWARE_BYTES)
         names.append('FIRMWARE.BIN')
@@ -98,6 +101,12 @@ def build_image(work, firmware):
         if fw_size != FIRMWARE_BYTES:
             raise SystemExit('unexpected FIRMWARE.BIN size in the FAT image')
         offsets += f' {fw_off} {fw_size}'
+    else:
+        offsets += ' 0 0'   # no FIRMWARE.BIN: init's fields stay in place
+    export_off, export_size = contiguous_file(data, b'EXPORT  BIN')
+    if export_size != EXPORT_BYTES:
+        raise SystemExit('unexpected EXPORT.BIN size in the FAT image')
+    offsets += f' {export_off} {export_size}'
     return data, (offsets + '\n').encode()
 
 

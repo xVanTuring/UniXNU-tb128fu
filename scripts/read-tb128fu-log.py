@@ -10,6 +10,7 @@ import argparse
 import glob
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,9 @@ from pathlib import Path
 UNIXNU = Path(__file__).resolve().parents[2] / 'UniXNU'
 # The window has the sheng format (package/BootLog.c is the sheng writer); its decoder needs Python 3.12 or later.
 DECODER = Path(__file__).resolve().parents[2] / 'UniXNU-sheng/scripts/read-sheng-log.py'
+EXPORT_UNPACK = ('import importlib.util, pathlib, sys; spec = importlib.util.spec_from_file_location("decoder", sys.argv[1]); '
+                 'decoder = importlib.util.module_from_spec(spec); spec.loader.exec_module(decoder); '
+                 'decoder.unpack_export(pathlib.Path(sys.argv[2]).read_bytes(), pathlib.Path(sys.argv[3]))')
 # The tablet's fastboot serial (TB128FU_SERIAL); without it, the only device in fastboot counts, and two or more are refused.
 SERIAL = os.environ.get('TB128FU_SERIAL', '')
 
@@ -97,12 +101,20 @@ def main():
     print(f'disk {volume} after {time.time() - start:.0f} s')
     run = a.out / time.strftime('%Y%m%d-%H%M%S')
     run.mkdir(parents=True)
-    names = ['STATUS.TXT', 'LOG.BIN'] + (['FIRMWARE.BIN'] if os.path.isfile(os.path.join(volume, 'FIRMWARE.BIN')) else [])
+    names = ['STATUS.TXT', 'LOG.BIN'] + [name for name in ('EXPORT.BIN', 'FIRMWARE.BIN') if os.path.isfile(os.path.join(volume, name))]
     for name in names:
         shutil.copyfile(os.path.join(volume, name), run / name)
     log = (run / 'LOG.BIN').read_bytes()
-    print((run / 'STATUS.TXT').read_text(errors='replace').rstrip())
+    status = (run / 'STATUS.TXT').read_text(errors='replace')
+    print(status.rstrip())
     print(f'LOG.BIN {len(log)} bytes, sha256 {hashlib.sha256(log).hexdigest()}, first bytes {log[:8]!r}')
+    # EXPORT.BIN holds the export from its start; "export.copy = N" is how much of it the reader filled (0: none, negative: failed).
+    copied = re.search(r'^export\.copy = (-?\d+)$', status, re.M)
+    if 'EXPORT.BIN' in names and copied and int(copied[1]) > 0:
+        export = run / 'EXPORT.BIN'
+        export.write_bytes(export.read_bytes()[:int(copied[1])])
+    elif 'EXPORT.BIN' in names:
+        (run / 'EXPORT.BIN').unlink()
     if 'FIRMWARE.BIN' in names:
         unpack_firmware((run / 'FIRMWARE.BIN').read_bytes(), run)
     subprocess.run(['diskutil', 'eject', volume], check=True)
@@ -113,6 +125,10 @@ def main():
     decode = ['uv', 'run', '--no-project', '--python', '3.13', str(DECODER), '--decode', str(run / 'LOG.BIN'), '--out', str(run / 'decoded')]
     if DECODER.is_file() and shutil.which('uv'):
         subprocess.run(decode)
+        # The decoder only reports a version 3 export ("fetched separately"); its unpack_export writes export.bin and export/.
+        if (run / 'EXPORT.BIN').is_file():
+            subprocess.run(['uv', 'run', '--no-project', '--python', '3.13', 'python', '-c', EXPORT_UNPACK, str(DECODER),
+                            str(run / 'EXPORT.BIN'), str(run)])
     else:
         print('decode with: ' + ' '.join(decode))
 
