@@ -54,9 +54,6 @@ boolean_t ml_set_interrupts_enabled(boolean_t);
 boolean_t ml_get_interrupts_enabled(void);
 boolean_t ml_at_interrupt_context(void);
 int get_preemption_level(void);
-vm_offset_t ml_vtophys(vm_offset_t);
-vm_offset_t ml_io_map_unmappable(vm_offset_t phys_addr, vm_size_t size, unsigned int flags);
-void ml_io_unmap(vm_offset_t addr, vm_size_t size);
 // Generated from the tablet's a610_zap.elf and a630_sqe.fw by scripts/build-native-legacy-display.py.
 extern const uint8_t tb128fu_gpu_zap[], tb128fu_gpu_sqe[];
 extern const uint32_t tb128fu_gpu_zap_size, tb128fu_gpu_sqe_size;
@@ -202,13 +199,10 @@ void rows(const Session &s) {
         "GPU na cp c%u sqe%x ring%x init%x w%u/%u mw%u %08x | st%08x r%u/%u hw%x cpi%x fsr%x | cg%08x prot%x",
         n[4], n[5], n[6], n[7], n[8], n[9], n[10], n[11], n[12], n[13], n[14], n[15], n[16], n[17], n[54], n[55]);
     // Secure mode (zap row above) through the ring: wait result; the GPU interrupt: attach status, GICD readback (group,
-    // enabled, edge, priority), count after attach / after a fence, statuses seen, status now; idle sleeps and spins.
-    // The imported-memory self test: steps passed of steps, first error and its step, source lines still dirty in the CPU cache
-    // before the submission (of 64; the test means something only when most are), destination dwords right (of 1024).
+    // enabled, edge, priority), count after attach / after a fence, statuses seen, status now.
     snprintf(tb128fu_gpu_rows[12], sizeof tb128fu_gpu_rows[12],
-        "GPU na sec w%d | irq a%x b%x n%u/%u%c seen%x now%x | imp p%u w%u/%u e%x@%d d%u/64 r%u/1024",
-        int(n[18]), n[19], n[20], n[21], n[22], n[23] ? '+' : '-', n[24], n[25], n[56], n[48], n[49], n[50], int(n[51]), n[52],
-        n[53]);
+        "GPU na sec w%d | irq a%x b%x n%u/%u%c seen%x now%x",
+        int(n[18]), n[19], n[20], n[21], n[22], n[23] ? '+' : '-', n[24], n[25]);
     // Publication: submit attach, timer attach, publish; the user-client self test: steps passed of steps, first error and
     // its step, matching dwords (of 4) of rounds 1 and 2, the first clientMemoryForType status; Metal accelerator stage, kext
     // load, status, registered.
@@ -1087,103 +1081,9 @@ int ucRound(IOService *svc, uint32_t *n) {
     uc->release();
     return matched;
 }
-// The imported-memory self test: the path of an IOSurface or any other memory a client hands the GPU from its own address space.
-// Such pages keep their cacheable CPU mapping while the GPU, which does not snoop the CPU caches on this SoC, maps them
-// non-cacheable, so the driver cleans them before each submission (NativeAdrenoVm::publishMapped) and invalidates the written
-// ones after it completes (acquireImported). Two kernel pages are imported through BoImport and mapped first; then S gets new
-// values that only the CPU cache holds (DRAM still has the old ones: n[52] lines of 64, read through an uncached mapping) and D's
-// old lines are cached. The GPU copies S over D (CP_MEMCPY, CP_WAIT_MEM_WRITES); D is read again while the copy may still run,
-// so stale lines can be cached at completion, and after the wait plain cached loads of D must return S's new values (n[53]).
-// n[48..51]: steps passed, steps, first error and its step.
-bool dramPage(uint64_t pa, uint32_t *out) {
-    const vm_offset_t page = ml_io_map_unmappable(vm_offset_t(pa), 0x1000, 0x7 /* VM_WIMG_IO */);
-    if (!page) return false;
-    for (unsigned i = 0; i < 1024; ++i) out[i] = reinterpret_cast<volatile uint32_t *>(page)[i];
-    ml_io_unmap(page, 0x1000);
-    return true;
-}
-// tb128fu-033 panicked in this test before the boot log had started ("kfree: addr ... found in kalloc type zone
-// 'kalloc.type.var5.16384' but being freed to data"), so it now runs from the heartbeat thread once the log is being written
-// (tb128fu-gpu-import=1 only), and before each step it publishes the step (n[56]) and waits 2.5 s, one log period, so a
-// panic leaves the step it was in.
-void ucImportRound(IOService *svc, Session &s) {
-    uint32_t *n = s.n;
-    auto phase = [&](uint32_t p) {n[56] = p; rows(s); IOSleep(2500);};
-    auto step = [&](IOReturn status) {
-        const uint32_t at = n[49]++;
-        if (!status) ++n[48];
-        else if (!n[50]) {n[50] = uint32_t(status); n[51] = at;}
-        return !status;
-    };
-    constexpr UInt32 kPluginOpenType = 0x4147;
-    constexpr uint64_t kIbIova = 0x20010000, kSrcIova = 0x20020000, kDstIova = kSrcIova + 0x1000;
-    uint8_t *buf = static_cast<uint8_t *>(IOMallocAligned(0x2000, 0x1000));
-    if (!step(buf ? kIOReturnSuccess : kIOReturnNoMemory)) return;
-    volatile uint32_t *S = reinterpret_cast<volatile uint32_t *>(buf), *D = S + 1024;
-    IOUserClient *uc = nullptr;
-    IOMemoryDescriptor *desc = nullptr;
-    IOMemoryMap *map = nullptr;
-    phase(1);
-    if (step(svc->newUserClient(kernel_task, nullptr, kPluginOpenType, nullptr, &uc)) && uc) {
-        NativeAdrenoAbiBoImport import{uint64_t(uintptr_t(buf)), 0x2000};
-        NativeAdrenoAbiBoAlloc alloc{4096, 12, 0};
-        NativeAdrenoAbiBoAllocReply imported{}, ib{};
-        NativeAdrenoAbiBoMap mapSrc{}, mapIb{};
-        NativeAdrenoAbiBoMapReply r{};
-        NativeAdrenoAbiBoCpuMap cm{};
-        NativeAdrenoAbiBoCpuMapReply cr{};
-        IOOptionBits opt = 0;
-        phase(2);
-        const bool importedOk = step(ucCall(uc, NativeAdrenoMethodBoImport, &import, &imported));
-        if (importedOk) phase(3);
-        if (importedOk &&
-            step(ucCall(uc, NativeAdrenoMethodBoMap, &(mapSrc = {imported.handle, kSrcIova, 3, 0, 2, 0}), &r)) &&
-            (phase(4), true) &&
-            step(ucCall(uc, NativeAdrenoMethodBoAlloc, &alloc, &ib)) &&
-            step(ucCall(uc, NativeAdrenoMethodBoMap, &(mapIb = {ib.handle, kIbIova, 1, 0, 2, 0}), &r)) &&
-            step(ucCall(uc, NativeAdrenoMethodBoCpuMap, &(cm = {ib.handle}), &cr)) &&
-            step(uc->clientMemoryForType(cr.token, &opt, &desc)) && desc &&
-            step((map = desc->createMappingInTask(kernel_task, 0, opt)) ? kIOReturnSuccess : kIOReturnNoMemory)) {
-            volatile uint32_t *iw = reinterpret_cast<volatile uint32_t *>(map->getVirtualAddress());
-            uint32_t words[7];
-            const bool built = AdrenoPM4Type7(0x75, 5, &words[0]) == AdrenoPM4Success && AdrenoPM4Type7(0x12, 0, &words[6]) == AdrenoPM4Success;
-            words[1] = 1024; words[2] = uint32_t(kSrcIova); words[3] = uint32_t(kSrcIova >> 32);
-            words[4] = uint32_t(kDstIova); words[5] = uint32_t(kDstIova >> 32);
-            for (unsigned i = 0; i < 7; ++i) iw[i] = words[i];
-            // The CPU side: old values to DRAM, S's new values only in the cache, D's old lines cached.
-            for (unsigned i = 0; i < 1024; ++i) {S[i] = 0x11110000u | i; D[i] = 0x33330000u | i;}
-            cleanToPoc(buf, 0x2000);
-            for (unsigned i = 0; i < 1024; ++i) S[i] = 0x22220000u | i;
-            uint32_t touch = 0;
-            for (unsigned i = 0; i < 1024; ++i) touch += D[i];
-            __asm__ volatile("dsb sy" ::: "memory");
-            static uint32_t dram[1024];
-            const uint64_t srcPhys = ml_vtophys(vm_offset_t(uintptr_t(buf)));
-            if (srcPhys && dramPage(srcPhys, dram)) for (unsigned i = 0; i < 1024; i += 16) n[52] += dram[i] == (0x11110000u | i);
-            NativeAdrenoAbiSubmit submit{};
-            submit.buffer_count = 1;
-            submit.buffers[0] = {ib.handle, kIbIova, sizeof words};
-            NativeAdrenoAbiSubmitReply sr{};
-            phase(5);
-            if (step(built ? kIOReturnSuccess : kIOReturnInternalError) && step(ucCall(uc, NativeAdrenoMethodSubmit, &submit, &sr))) {
-                for (unsigned i = 0; i < 1024; ++i) touch += D[i];   // may cache old lines while the copy runs
-                NativeAdrenoAbiWaitFence wait{sr.fence, 200000000ull};
-                if (step(ucCall(uc, NativeAdrenoMethodWaitFence, &wait, nullptr)))
-                    for (unsigned i = 0; i < 1024; ++i) n[53] += D[i] == (0x22220000u | i);
-            }
-            (void)touch;
-        }
-    }
-    phase(6);
-    if (map) map->release();
-    if (desc) desc->release();
-    phase(7);
-    if (uc) {step(uc->clientClose()); uc->release();}   // unpins the imported pages
-    phase(8);
-    cleanToPoc(buf, 0x2000);
-    IOFreeAligned(buf, 0x2000);
-    phase(9);
-}
+// No imported-memory test here: BoImport pins memory of a user task, and NativeAdreno's host fixture refuses kernel_task imports
+// (tests/XnuMemoryFixture.h). A kernel-buffer version of that test panicked tb128fu-033 ("kfree: ... found in kalloc type zone
+// 'kalloc.type.var5.16384' but being freed to data"); the import path is exercised by the Metal plugin's own clients instead.
 // Two rounds: the second proves the client slot and the IOVAs recycle after clientClose. tb128fu-gpu-selftest=0 skips them.
 bool naSelfTest(Session &s) {
     unsigned on = 1;
@@ -1230,6 +1130,10 @@ bool naMetal(Session &s) {
     accelerator->setProperty("MetalPluginName", "NativeAdrenoMetal");
     accelerator->setProperty("NativeSandboxGrantProcess", "backboardd");
     accelerator->setProperty("MetalPluginClassName", "NativeAdrenoMetalDevice");
+    // Turnip reports Vulkan 1.0 on a6xx gen1 (no hardware multiview) and metal2vulkan needs 1.2: the plugin puts this into TU_DEBUG
+    // before it loads Turnip (NativeAdrenoMetalPlugin.mm applyBoardTurnipDebug). noconform makes Turnip report 1.3; nocb keeps
+    // concurrent binning off as the plugin's own default does. Multiview stays without hardware support.
+    accelerator->setProperty("NativeTurnipDebug", "nocb,noconform");
     n[29] = 4;
     if (!accelerator->attach(IOService::getPlatform())) {accelerator->release(); return stop(kIOReturnNotAttached);}
     accelerator->registerService();
@@ -1241,16 +1145,8 @@ bool naMetal(Session &s) {
 
 // Row 14, refreshed every 2 s once the device is published: interrupts (count, last status, all seen, masked), fence waits
 // that slept or spun, submissions (submitted, completed, timeouts), user clients opened/closed, BO pool use.
-// The imported-memory test (tb128fu-gpu-import=1) runs once, 60 s after publication, when the boot log is being written.
 [[noreturn]] void naHeartbeat(Session &s) {
-    unsigned import = 0;
-    PE_parse_boot_argn("tb128fu-gpu-import", &import, sizeof import);
-    for (unsigned beat = 0;; ++beat) {
-        if (import && beat == 30) {
-            mark(s, 102);
-            if (IOService *svc = native_adreno_published_service()) ucImportRound(svc, s);
-            rows(s);
-        }
+    for (;;) {
         const NativeAdrenoSubmitStats st = gSubmit->stats();
         uint32_t closed = 0;
         const uint32_t opened = native_adreno_publish_stats(&closed);

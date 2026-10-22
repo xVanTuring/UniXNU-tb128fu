@@ -1,6 +1,7 @@
 #!/opt/homebrew/bin/bash
 # Tools the GPU user-space build needs on this Mac (UniXNU scripts/build-turnip-darwin.py, build-native-metal-bridge.py,
-# build-adreno-metal-plugin.py), for the TB128FU tree: glslangValidator and a current bison (Homebrew), a Python venv with
+# build-adreno-metal-plugin.py), for the TB128FU tree: glslangValidator, a current bison, glslc (shaderc: the plugin's smoke
+# shaders, gen-turnip-smoke-shaders.py) and the Vulkan headers (check-turnip-darwin-host.py's host smoke) from Homebrew, a Python venv with
 # meson and Mesa's generator modules at <tree>/.cache/mesa-venv, bison linked into <tree>/.cache/mesa-tools/bin (both put on
 # PATH by the build scripts), and Rust 1.98.0 with the aarch64-apple-ios target (metal2vulkan's pinned toolchain).
 # Run it yourself once: ./scripts/setup-gpu-userspace-tools.sh
@@ -20,7 +21,7 @@ if [ "${MIRROR:-}" = tuna ]; then
   export UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 fi
 
-brew install glslang bison
+brew install glslang bison shaderc vulkan-headers
 
 uv venv --allow-existing --python 3.13 "$TREE/.cache/mesa-venv"
 uv pip install --python "$TREE/.cache/mesa-venv/bin/python" meson mako pyyaml packaging pycparser
@@ -36,6 +37,8 @@ fi
 rustup target add aarch64-apple-ios --toolchain 1.98.0
 
 echo "glslangValidator: $(command -v glslangValidator)"
+echo "glslc: $(command -v glslc)"
+echo "vulkan headers: $(ls "$(brew --prefix vulkan-headers)/include/vulkan/vulkan.h")"
 echo "meson: $("$TREE/.cache/mesa-venv/bin/meson" --version)"
 echo "bison: $("$TREE/.cache/mesa-tools/bin/bison" --version | head -1)"
 echo "rust: $(rustc +1.98.0 --version)"
