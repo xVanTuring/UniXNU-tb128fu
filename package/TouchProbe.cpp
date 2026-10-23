@@ -469,8 +469,10 @@ static void touchThread(void *, wait_result_t) {
 }
 
 // Scripted strokes for runs nobody watches (tb128fu-touch bits 8 and up: their count). Once the GPU hand-off has completed frames
-// (the home screen is up) and 30 s more have passed, strokes alternately right to left and back across the middle of the panel, each
-// 300 ms long with 1.5 s between them: one finger in a slot the controller does not use, published as its frames are (publish).
+// (the lock screen is up) and 30 s more have passed, a swipe up from the bottom edge unlocks to the home screen, and 5 s later strokes
+// alternately right to left and back across the middle of the panel turn its pages, each 300 ms long with 1.5 s between them: one
+// finger in a slot the controller does not use, published as its frames are (publish). Without the swipe the strokes ran on whichever
+// screen was up, the lock screen unless someone unlocked, and rounds did not compare (tb128fu-077, 078).
 extern "C" volatile uint64_t native_gop_gpu_completions __attribute__((weak_import));
 extern "C" volatile uint32_t native_touch_auto_done;
 volatile uint32_t native_touch_auto_done;
@@ -478,6 +480,14 @@ static void autoTouchThread(void *arg, wait_result_t) {
     const unsigned strokes = static_cast<unsigned>(reinterpret_cast<uintptr_t>(arg));
     while (!&native_gop_gpu_completions || !native_gop_gpu_completions) IOSleep(1000);
     IOSleep(30000);
+    // From the panel's last rows, where NativeHidInput marks the contact as an edge one (SpringBoard's home gesture needs it).
+    for (int step = 0; step <= 25; ++step) {
+        hx_point p = {9, 600, 1995 - 1095 * step / 25, 8};
+        publish(1, &p);
+        IOSleep(10);
+    }
+    publish(0, nullptr);
+    IOSleep(5000);
     for (unsigned i = 0; i < strokes; ++i) {
         const int from = (i & 1) ? 240 : 960, to = (i & 1) ? 960 : 240;
         for (int step = 0; step <= 30; ++step) {
