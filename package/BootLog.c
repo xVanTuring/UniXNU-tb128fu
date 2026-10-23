@@ -118,6 +118,9 @@ extern uint64_t cs_native4k_bytes __attribute__((weak_import)), cs_native4k_read
     cs_native4k_hash_ticks __attribute__((weak_import));
 // The RPM channel (RpmGlink.cpp) and the GPU clock votes of stage 9 (GpuProbe.cpp dvfsPrepare).
 extern char tb128fu_rpm_rows[3][120] __attribute__((weak_import));
+// The USB log channel (UsbLog.cpp): its rows, and its queue, which takes each snapshot and the message buffer's new text.
+extern char tb128fu_usb_rows[5][120] __attribute__((weak_import));
+extern void tb128fu_usb_log_put(const void *data, size_t length) __attribute__((weak_import));
 extern char tb128fu_gpu_dvfs[2][120] __attribute__((weak_import));
 extern char native_gpu_coherence_row[120] __attribute__((weak_import));
 extern size_t boot_progress_profile_rows(char *, size_t) __attribute__((weak_import));
@@ -490,6 +493,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     for (unsigned r = 0; r < 3; ++r)
       if (tb128fu_rpm_rows[r][0]) at = put(out, at, cap, tb128fu_rpm_rows[r], sizeof tb128fu_rpm_rows[r]);
   }
+  if (&tb128fu_usb_rows && tb128fu_usb_rows[0][0]) {
+    at = put(out, at, cap, "[usb]", 6);
+    for (unsigned r = 0; r < 5; ++r)
+      if (tb128fu_usb_rows[r][0]) at = put(out, at, cap, tb128fu_usb_rows[r], sizeof tb128fu_usb_rows[r]);
+  }
   if (&tb128fu_gpu_dvfs)
     for (unsigned r = 0; r < 2; ++r)
       if (tb128fu_gpu_dvfs[r][0]) at = put(out, at, cap, tb128fu_gpu_dvfs[r], sizeof tb128fu_gpu_dvfs[r]);
@@ -680,6 +688,26 @@ static uint32_t copy_msgbuf(uint8_t *out) {
   return n;
 }
 
+// The message buffer's text written since the previous call (msg_bufx is its next write position), to the USB log channel.
+static void usb_messages(void) {
+  static int last = -1;
+  struct boot_log_msgbuf *m = msgbufp;
+  if (!&tb128fu_usb_log_put || !m || !m->msg_bufc || m->msg_size <= 0) return;
+  const int size = m->msg_size, x = m->msg_bufx;
+  if (x < 0 || x >= size) return;
+  if (last < 0) last = (x + 1) % size;   // the first call sends the whole buffer
+  char head[48];
+  int n = (x - last + size) % size;
+  snprintf(head, sizeof head, "\n#msg %d\n", n);
+  tb128fu_usb_log_put(head, strlen(head));
+  if (last + n <= size) tb128fu_usb_log_put(m->msg_bufc + last, (size_t)n);
+  else {
+    tb128fu_usb_log_put(m->msg_bufc + last, (size_t)(size - last));
+    tb128fu_usb_log_put(m->msg_bufc, (size_t)(n - (size - last)));
+  }
+  last = x;
+}
+
 static void writer(void *arg, wait_result_t result) {
   (void)arg; (void)result;
   thread_set_thread_name(current_thread(), "boot_log");
@@ -724,6 +752,11 @@ static void writer(void *arg, wait_result_t result) {
     // Text slot, then the message buffer, then the header that makes both visible.
     memset(boot_log_buffer, 0, LogSlotBlocks * LogBlock);
     compose((char *)boot_log_buffer, LogSlotBlocks * LogBlock, h.slots_written, now);
+    if (&tb128fu_usb_log_put) {
+      tb128fu_usb_log_put("\n", 1);
+      tb128fu_usb_log_put(boot_log_buffer, strnlen((const char *)boot_log_buffer, LogSlotBlocks * LogBlock));
+      usb_messages();
+    }
     ok &= native_ufs_log_write(LogSlotFirst + (uint64_t)(h.slots_written % slot_count) * LogSlotBlocks, LogSlotBlocks, boot_log_buffer);
     h.msg_bytes = copy_msgbuf(boot_log_buffer);
     ok &= native_ufs_log_write(LogMsgFirst, LogMsgBlocks, boot_log_buffer);

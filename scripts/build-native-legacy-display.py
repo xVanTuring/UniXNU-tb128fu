@@ -318,6 +318,10 @@ run([str(gpu_source) if str(arg)==str(source) else str(gpu_obj) if str(arg)==str
 rpm_source=ROOT/'kits/tb128fu/RpmGlink.cpp';rpm_obj=touch_dir/'RpmGlink.o'
 run([str(rpm_source) if str(arg)==str(source) else str(rpm_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],
     cwd=r['directory'])
+# The USB log channel (UsbLog.cpp): the DWC3 controller and its femto PHY, brought up in stages from the late probe.
+usb_source=ROOT/'kits/tb128fu/UsbLog.cpp';usb_obj=touch_dir/'UsbLog.o'
+run([str(usb_source) if str(arg)==str(source) else str(usb_obj) if str(arg)==str(OUT/'LegacyDisplayProbe.o') else arg for arg in cmd],
+    cwd=r['directory'])
 zap=Path(os.environ.get('TB128FU_GPU_ZAP') or ROOT/'.cache/firmware/gpu/a610_zap.elf')
 require(zap.is_file(),f'Missing the GPU zap shader {zap} (package/linux-log/build-log-reader.py --vendor-file firmware/a610_zap.elf)')
 zap_blob=zap.read_bytes();zap_c=touch_dir/'GpuZap.c'
@@ -333,7 +337,7 @@ sqe_c.write_text(f'// {sqe.name}, sha256 {hashlib.sha256(sqe_blob).hexdigest()}\
                  'const uint8_t tb128fu_gpu_sqe[] __attribute__((aligned(16))) = {'+','.join(map(str,sqe_blob))+'};\n'
                  f'const uint32_t tb128fu_gpu_sqe_size = {len(sqe_blob)};\n')
 sqe_obj=touch_dir/'GpuSqe.o';c_compile(sqe_c,sqe_obj)
-touch_objs+=[gpu_obj,rpm_obj,zap_obj,sqe_obj]
+touch_objs+=[gpu_obj,rpm_obj,usb_obj,zap_obj,sqe_obj]
 # The display backend, its probe, the key store, the HID input and the touch controller: sheng's touch panel, CPU frequency and
 # GPU power objects and QEMU's VirtIO input, shared window and Metal accelerator stay out (they drive other hardware).
 archive=OUT/'libNativeLegacyDisplay.late.a';archive.unlink(missing_ok=True)

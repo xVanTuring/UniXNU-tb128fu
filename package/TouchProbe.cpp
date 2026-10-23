@@ -6,6 +6,7 @@
 //   3  GENI SPI init (FIFO mode) and clock, an engine loopback test, then reset the controller and read its chip id
 //   4  load the firmware into the controller (zero flash) and start it (needs the generated firmware object)
 //   5  read touch reports on the attention line and publish the finger set to NativeHidInput (TouchState.cpp)
+// Bits 8 and up of the value are a count of scripted strokes (autoTouchThread) for runs nobody watches: 10245 is stage 5 and 40.
 // Every stage reports on the diagnostic page and in the UFS log ([touch probe]); the first failure stops the sequence. Board
 // constants and their sources are in TouchBoard.h, the controller protocol in HimaxProtocol.c.
 #include <IOKit/IOService.h>
@@ -467,12 +468,41 @@ static void touchThread(void *, wait_result_t) {
     rows(*s);
 }
 
+// Scripted strokes for runs nobody watches (tb128fu-touch bits 8 and up: their count). Once the GPU hand-off has completed frames
+// (the home screen is up) and 30 s more have passed, strokes alternately right to left and back across the middle of the panel, each
+// 300 ms long with 1.5 s between them: one finger in a slot the controller does not use, published as its frames are (publish).
+extern "C" volatile uint64_t native_gop_gpu_completions __attribute__((weak_import));
+extern "C" volatile uint32_t native_touch_auto_done;
+volatile uint32_t native_touch_auto_done;
+static void autoTouchThread(void *arg, wait_result_t) {
+    const unsigned strokes = static_cast<unsigned>(reinterpret_cast<uintptr_t>(arg));
+    while (!&native_gop_gpu_completions || !native_gop_gpu_completions) IOSleep(1000);
+    IOSleep(30000);
+    for (unsigned i = 0; i < strokes; ++i) {
+        const int from = (i & 1) ? 240 : 960, to = (i & 1) ? 960 : 240;
+        for (int step = 0; step <= 30; ++step) {
+            hx_point p = {9, from + (to - from) * step / 30, 1000, 8};
+            publish(1, &p);
+            IOSleep(10);
+        }
+        publish(0, nullptr);
+        native_touch_auto_done = i + 1;
+        IOSleep(1500);
+    }
+}
+
 extern "C" void native_touch_probe(void) {
-    unsigned stage = 0;
-    if (!PE_parse_boot_argn("tb128fu-touch", &stage, sizeof stage) || stage < 1 || native_touch_stage_req) return;
+    unsigned value = 0;
+    if (!PE_parse_boot_argn("tb128fu-touch", &value, sizeof value) || (value & 0xff) < 1 || native_touch_stage_req) return;
+    unsigned stage = value & 0xff;
     if (stage > 5) stage = 5;
     native_touch_stage_req = stage;
     thread_t thread = nullptr;
     if (kernel_thread_start(touchThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
     else native_touch_error = -12;
+    if (stage == 5 && (value >> 8)) {
+        thread_t automatic = nullptr;
+        if (kernel_thread_start(autoTouchThread, reinterpret_cast<void *>(static_cast<uintptr_t>(value >> 8)), &automatic) == KERN_SUCCESS)
+            thread_deallocate(automatic);
+    }
 }

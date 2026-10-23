@@ -484,14 +484,16 @@ extern void native_hid_input_probe(void);
 extern void native_keystore_probe(void);
 extern void native_touch_probe(void);
 extern void tb128fu_gpu_probe(void);
+extern void tb128fu_usb_probe(void);
 // TB128FU: sheng's CPU frequency and GPU power probes drive sheng hardware and are not in this board's archive; the touch and
 // GPU probes are this board's own (TouchProbe.cpp, Himax HX83102E, tb128fu-touch=<stage>; GpuProbe.cpp, Adreno 610,
-// tb128fu-gpu=<stage>; both default off).
+// tb128fu-gpu=<stage>; both default off), and so is the USB log channel (UsbLog.cpp, its stage in the source).
 void native_legacy_display_late_probe(void) {
     native_keystore_probe();
     native_hid_input_probe();
     native_touch_probe();
     tb128fu_gpu_probe();
+    tb128fu_usb_probe();
     IOService *display=pendingLegacyDisplay;if(!display)return;pendingLegacyDisplay=nullptr;
     native_legacy_surface_status=OSKextLoadKextWithIdentifier("com.apple.iokit.IOSurface");
     OSDictionary *matching=IOService::nameMatching("IOCoreSurfaceRoot");
