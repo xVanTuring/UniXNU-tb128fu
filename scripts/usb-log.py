@@ -2,7 +2,7 @@
 """Live board log from the TB128FU over USB (package/UsbLog.cpp: a CDC ACM port, /dev/cu.usbmodem* on macOS).
 
 Waits for the port, puts it in raw mode, appends everything it reads to out/tb128fu/usb-log/<time>.log (one file per connection)
-and keeps a copy of the newest snapshot (the text after the last "#slot" line) in latest.txt beside it. Standard library only.
+and keeps the newest complete snapshot (from one "#slot" line to the next) in latest.txt beside it. Standard library only.
 
   python3 scripts/usb-log.py [--dir DIR] [--port /dev/cu.usbmodemXXXX] [--quiet]
 """
@@ -70,9 +70,12 @@ def main():
                     sys.stdout.write(data.decode('utf-8', 'replace'))
                     sys.stdout.flush()
                 latest += data
+                # A new "#slot" line ends the snapshot before it: that one is the newest complete snapshot.
                 cut = latest.rfind(b'#slot ')
                 if cut > 0:
-                    (args.dir / 'latest.txt').write_bytes(bytes(latest[cut:]))
+                    start = latest.rfind(b'#slot ', 0, cut)
+                    if start >= 0:
+                        (args.dir / 'latest.txt').write_bytes(bytes(latest[start:cut]))
                     latest = latest[cut:]
                 if len(latest) > (4 << 20):
                     latest = latest[-(1 << 20):]
