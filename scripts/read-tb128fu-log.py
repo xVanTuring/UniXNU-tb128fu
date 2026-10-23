@@ -12,10 +12,11 @@ import hashlib
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 UNIXNU = Path(__file__).resolve().parents[2] / 'UniXNU'
 # The window has the sheng format (package/BootLog.c is the sheng writer); its decoder needs Python 3.12 or later.
@@ -127,10 +128,39 @@ def main():
         subprocess.run(decode)
         # The decoder only reports a version 3 export ("fetched separately"); its unpack_export writes export.bin and export/.
         if (run / 'EXPORT.BIN').is_file():
-            subprocess.run(['uv', 'run', '--no-project', '--python', '3.13', 'python', '-c', EXPORT_UNPACK, str(DECODER),
-                            str(run / 'EXPORT.BIN'), str(run)])
+            unpacked = subprocess.run(['uv', 'run', '--no-project', '--python', '3.13', 'python', '-c', EXPORT_UNPACK, str(DECODER),
+                                       str(run / 'EXPORT.BIN'), str(run)])
+            if unpacked.returncode:
+                salvage_export((run / 'EXPORT.BIN').read_bytes(), run / 'export' / 'files')
     else:
         print('decode with: ' + ' '.join(decode))
+
+
+def salvage_export(blob, out):
+    """The whole files of an export the reader copied only in part (its first 32 MiB; the plugin sends the cache directory's own
+    files first, CacheExport.h): the "SHEXR001" stream's files in order, the one cut short as <name>.partial."""
+    if blob[:8] != b'SHEXR001':
+        return
+    raw = blob[16:16 + struct.unpack_from('<I', blob, 8)[0]]
+    at = 12 + struct.unpack_from('<I', raw, 8)[0]
+    count = struct.unpack_from('<I', raw, at)[0]
+    at += 4
+    whole = 0
+    for _ in range(count):
+        if at + 24 > len(raw):
+            break
+        plen, _, _, _, size = struct.unpack_from('<IIIIQ', raw, at)
+        rel = raw[at + 24:at + 24 + plen].decode(errors='replace')
+        at += 24 + plen
+        if rel.startswith('/') or '..' in PurePosixPath(rel).parts:
+            break
+        data = raw[at:at + size]
+        at += size
+        dest = out / (rel if len(data) == size else rel + '.partial')
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        whole += len(data) == size
+    print(f'{out}: salvaged {whole} of {count} files from a cut export')
 
 
 if __name__ == '__main__':
