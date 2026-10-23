@@ -221,15 +221,16 @@ kernel_args = [
   "sheng-data-persist=2",
   # Continuous on-screen bring-up page, tagged so a photograph says which image it is.
   "boot-progress=2",
-  "sheng-build-tag=tb128fu-042",
+  "sheng-build-tag=tb128fu-047",
   # Adreno 610 bring-up (package/GpuProbe.cpp): snapshot, power at 320 MHz, read-only view of the GPU's SMMU (all passed in
   # tb128fu-020), the TrustZone queries (tb128fu-021: SCM calls answer; IS_CALL_AVAIL(init_image) 1, PAS_IS_SUPPORTED(13) 0;
   # XNU manages 0x8487c000-0x18487c000, so gpu_region@55615000 is outside it). Stages 5 and 6 (a hand-built SMMU bank, the first
   # GPU command, the zap shader with CP_SET_SECURE_MODE(0)) passed in tb128fu-023..026; stage 7 does the same through
   # NativeAdreno and publishes the GPU for user clients (tb128fu-029..035). Stage 8 also publishes the staged accelerator for the
   # original Metal discovery, with NativeTurnipDebug "nocb,noconform" (Turnip reports Vulkan 1.3 on the A610 only so).
-  # Stage 9 first votes through the RPM (package/RpmGlink.cpp: GLINK in the RPM message RAM): CX at TURBO and the DDR clock at
-  # its maximum, then starts the GPU at 785 MHz instead of 320 (tb128fu-040: compositor frames of 170 to 350 ms at 320 MHz).
+  # Stage 9 first votes through the RPM (package/RpmGlink.cpp: GLINK in the RPM message RAM): CX at TURBO_NO_CPR, MX at TURBO and
+  # the DDR clock at its maximum, starts the GPU at 785 MHz and lets a load governor move it between 320 and 1114.8 MHz
+  # (tb128fu-040: compositor frames of 170 to 350 ms at 320 MHz; tb128fu-042, fixed at 785 MHz: 136 ms).
   "tb128fu-gpu=9",
   # The GPU addon of the payload (make-gpu-addon.py --publish: the Metal plugin, Turnip, adrenoprobed) written into the Data
   # volume and mounted before launchd starts (patches/xnu/zzy-native-gpu-addon-mount.patch); the name is UniXNU-sheng's.
@@ -238,6 +239,11 @@ kernel_args = [
   # frame buffer with the GPU. tb128fu-039 rendered with Metal but the display driver copied every frame with the CPU, and its two
   # content scans of the first frames read the uncached GPU surface pixel by pixel: 1.2 to 1.4 s from swap to scanout (copy 76 ms).
   "sheng-fb-gpu=1",
+  # A fixed 60 Hz for the render server (drivers/NativeMobileDisplay, the tb128fu branch): a work-loop tick stands in for the GOP
+  # scanout's missing vblank, and the refresh attributes report 60 Hz as both the minimum and the maximum rate. With the generic
+  # 24 to 60 Hz range the render server settled at 24 Hz (tb128fu-046: swaps every 41.7 ms, each frame done in 11 to 19 ms).
+  "sheng-vsync=60",
+  "sheng-vsync-fixed=1",
   # No corpses for crashing processes (osfmk/corpses/corpse.c): without a GPU, iconservicesagent crashes in CoreImage over and
   # over (tb128fu-017: 16 crashes in 420 s), and each corpse's vm_map_corpse_footprint_collect walked its whole map on this
   # DEVELOPMENT kernel, half of all CPU samples; launchd's restarts took most of the rest. Our own [crashes] record does not
@@ -252,12 +258,13 @@ kernel_args = [
   # (display factory calibration, not used by the firmware frame buffer) 49 times; launchd took most of the CPU samples.
   # tb128fu-034: iconservicesagent crashed 14 times (as in 017, CoreImage +0x1b0ac4 called through IconServices, IconFoundation and
   # CoreUI). Without a Metal device CoreImage takes its OpenGL ES path, and the GL dispatch it calls (glDisable of DEPTH_TEST,
-  # SCISSOR_TEST, DITHER, CULL_FACE) is empty here. It runs only when icons must be rendered; disabled, as UniXNU-sheng's
-  # skip-setup guide does, until the Metal user space exists. Icons missing from the cache then stay blank.
+  # SCISSOR_TEST, DITHER, CULL_FACE) is empty here. It runs only when icons must be rendered; it was disabled, as UniXNU-sheng's
+  # skip-setup guide does, until the Metal user space existed (icons missing from the cache stayed blank). From tb128fu-044 it runs
+  # with its own Metal device: the GPU addon lists it as a client and the GPU probe's sandbox grant names it.
   # tb128fu-038/039 enabled com.apple.iomfb_fdr_loader for the GPU addon's job of that name (the probe daemon adrenoprobed), but
   # launchd ran the original loader all the same (exit 1 after 23 failed frame buffer calls) although the LaunchDaemons overlay
   # was mounted with the addon's plists visible: disabled again.
-  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader,com.apple.iconservices.iconservicesagent",
+  "sheng-disable-jobs=com.apple.identityservicesd,com.apple.locationd,com.apple.CommCenter,com.apple.bluetoothd,com.apple.PerfPowerServices,com.apple.iomfb_fdr_loader",
   # The touch controller (package/TouchProbe.cpp: Himax HX83102E on QUP SE0 SPI, the firmware loaded from the kernel): every
   # stage up to reading reports and publishing them to NativeHidInput.
   "tb128fu-touch=5",

@@ -853,8 +853,10 @@ static uint64_t banner_sleep_n,banner_sleep_sum,banner_sleep_late,banner_tint,ba
 static unsigned banner_second,banner_top;
 static uint64_t banner_copy_n,banner_signature,banner_ufs_v,banner_ufs_r,banner_ufs_n,banner_ufs_b;
 static uint32_t banner_load[4];
-static void crash_banner(unsigned now) {
-  if(!boot_progress_display_owned || display.bound || !display.frame || !display.scale || now-banner_second<2)return;
+// paint 0: only the rows for the UFS log (boot_progress_banner_text), with the on-screen banner off.
+static void crash_banner(unsigned now,int paint) {
+  if(!boot_progress_display_owned || now-banner_second<2)return;
+  if(paint && (display.bound || !display.frame || !display.scale))return;
   // Each repaint is about a million device stores. A swap overwrites the whole frame, so repaint only when a swap has happened
   // since the last paint or the crash records changed; an idle screen keeps the banner.
   uint64_t gpu_sig=0;
@@ -981,6 +983,13 @@ static void crash_banner(unsigned now) {
     snprintf(rows[n++],120,"%s%s",part?"      ":"PANIC ",piece);
   }
   if(!n)return;
+  char head[120];
+  snprintf(head,sizeof head," UniXNU live diagnostics%s%s%s  t=%us  crashes=%u exits=%u",build_tag[0]?"  [":"",build_tag,
+    build_tag[0]?"]":"",now,crashes,failed);
+  memcpy(boot_progress_banner_text[0],head,120);
+  for(unsigned i=0;i<n;++i)memcpy(boot_progress_banner_text[i+1],rows[i],120);
+  boot_progress_banner_rows=n+1;
+  if(!paint)return;
   unsigned cell=14*display.scale,cols=display.width/(6*display.scale);if(cols>119)cols=119;
   if(display.height<(n+2)*cell+8)return;
   // A title row above the panel; the panel grows upwards from the bottom edge. When it shrank since the last paint, the rows it
@@ -992,13 +1001,7 @@ static void crash_banner(unsigned now) {
       for(unsigned x=0;x<cols*6*display.scale;++x)*(volatile uint32_t *)(display.frame+(uintptr_t)y*display.stride+x*4)=0xff000000;
     }
   banner_top=title;
-  char head[120];
-  snprintf(head,sizeof head," UniXNU live diagnostics%s%s%s  t=%us  crashes=%u exits=%u",build_tag[0]?"  [":"",build_tag,
-    build_tag[0]?"]":"",now,crashes,failed);
   px_text(0,title,head,cols,0xffffffff,BP_BAR_LIVE);
-  memcpy(boot_progress_banner_text[0],head,120);
-  for(unsigned i=0;i<n;++i)memcpy(boot_progress_banner_text[i+1],rows[i],120);
-  boot_progress_banner_rows=n+1;
   for(unsigned i=0;i<n;++i) {
     if(__atomic_load_n(&display.yield_requested,__ATOMIC_ACQUIRE))return;
     const char *r=rows[i];
@@ -1010,17 +1013,19 @@ static void crash_banner(unsigned now) {
 }
 static void touch_overlay_locked(void);
 static void touch_overlay(void) {
-  // sheng-banner=0 switches every on-screen diagnostic painting off once the system owns the display (the UFS log carries the same rows):
-  // the painters hold render_busy for about a million uncached stores, which a swap's scanout hand-off has to wait for.
+  // Every on-screen diagnostic painting stops once the system owns the display unless sheng-banner=1 (the UFS log carries the same
+  // rows): the painters hold render_busy for about a million uncached stores, which a swap's scanout hand-off has to wait for, and
+  // each GPU-copied frame wiped the banner the next pass painted again (tb128fu-043: it flickered whenever the screen was touched).
+  // UniXNU-sheng sets sheng-banner=0; here it is the default, the boot arguments have no room left.
   static int banner_off=-1;
-  if(banner_off<0){unsigned v=1;PE_parse_boot_argn("sheng-banner",&v,sizeof(v));banner_off=v==0;}
-  if(banner_off)return;
+  if(banner_off<0){unsigned v=0;PE_parse_boot_argn("sheng-banner",&v,sizeof(v));banner_off=v==0;}
+  if(banner_off){crash_banner(seconds(),0);return;}   // the log still gets the banner's rows
   __atomic_fetch_add(&touch_passes,1,__ATOMIC_RELAXED);
   // Same rule as the text renderer: draw only while holding render_busy, so a display handoff (which takes it before
   // retiring the mapping) can never overlap these stores. A pass that finds it taken is simply skipped.
   if(__atomic_exchange_n(&render_busy,1,__ATOMIC_ACQUIRE))return;
   ext_overlay_locked();
-  crash_banner(seconds());
+  crash_banner(seconds(),1);
   if(&native_touch_stage_req && native_touch_stage_req)touch_overlay_locked();
   __atomic_store_n(&render_busy,0,__ATOMIC_RELEASE);
 }

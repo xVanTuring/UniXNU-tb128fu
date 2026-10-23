@@ -1,0 +1,24 @@
+[submodule "drivers/NativeAdreno"]
+	path = drivers/NativeAdreno
+	url = https://github.com/xVanTuring/NativeAdreno.git
+	branch = tb128fu
+[submodule "drivers/NativeMetal"]
+	path = drivers/NativeMetal
+	url = https://github.com/xVanTuring/NativeMetal.git
+	branch = tb128fu
+[submodule "drivers/NativeUfs"]
+	path = drivers/NativeUfs
+	url = https://github.com/xVanTuring/NativeUfs.git
+	branch = tb128fu
+[submodule "drivers/ArmCpu"]
+	path = drivers/ArmCpu
+	url = https://github.com/xVanTuring/ArmCpu.git
+	branch = tb128fu
+[submodule "kits/ArmSmmu4K"]
+	path = kits/ArmSmmu4K
+	url = https://github.com/xVanTuring/ArmSmmu4K.git
+	branch = tb128fu
+[submodule "drivers/NativeMobileDisplay"]
+	path = drivers/NativeMobileDisplay
+	url = https://github.com/xVanTuring/NativeMobileDisplay.git
+	branch = tb128fu

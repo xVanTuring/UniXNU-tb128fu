@@ -44,8 +44,9 @@
 
 extern "C" {
 char tb128fu_gpu_rows[16][120];
-// Stage 9 (dvfsPrepare): the RPM votes, the memory copy rate before and after the DDR vote, and the GPU clock chosen.
-char tb128fu_gpu_dvfs[120];
+// Stage 9: the RPM votes, the memory copy rate before and after the DDR vote and the boot clock (dvfsPrepare); the governor's
+// level, switches, load and time at each level (dvfsThread).
+char tb128fu_gpu_dvfs[2][120];
 int tb128fu_rpm_open(void);
 int tb128fu_rpm_request(uint32_t set, uint32_t type, uint32_t id, uint32_t key, uint32_t value);
 volatile unsigned tb128fu_gpu_stage_req, tb128fu_gpu_stage_done, tb128fu_gpu_step;
@@ -72,7 +73,7 @@ IOReturn native_adreno_publish(NativeAdrenoVm *, NativeAdrenoSubmit *, NativeAdr
 uint32_t native_adreno_publish_stats(uint32_t *);
 IOService *native_adreno_published_service();
 extern volatile uint32_t native_adreno_smmu_coherent_walk, native_adreno_pool_mib, native_adreno_wc_enabled, native_adreno_pool_status,
-    native_adreno_pool_wc, native_adreno_pool_stats[8];
+    native_adreno_pool_wc, native_adreno_pool_stats[8], native_adreno_written_imports_owned;
 IOReturn armcpu_spi_attach(uint32_t intid, bool edge, void (*handler)(void *), void *context, uint32_t *readback, uint64_t *router);
 // The staged AGXAccelerator (drivers/NativeAdreno/NativeAdrenoAccelerator.cpp, build-native-adreno-accelerator.py): its static
 // initializer runs only after the original IOGPUFamily kext has loaded, because the parent metaclass does not exist before that.
@@ -763,6 +764,11 @@ bool naContext(Session &s) {
     n[37] = rd(s.smmu, 0x800); n[38] = rd(s.smmu, 0x804);
     native_adreno_smmu_coherent_walk = 0;
     native_adreno_wc_enabled = 1;
+    // The A610 is not IO-coherent (kgsl adreno-gpulist.h gives it no ADRENO_IOCOHERENT), so every submission cleaned every import in
+    // full: in tb128fu-045 a submission spent 12 ms on about 89 MB. The render targets the GPU writes are cleaned and invalidated
+    // when mapped and left alone afterwards, as upstream does on coherent boards (NativeAdrenoVm.cpp importedUntouched); the
+    // read-only imports, which their owners draw into with the CPU, are still cleaned every time.
+    native_adreno_written_imports_owned = 1;
     // The BO pool, one contiguous block taken before memory fragments (sheng-gpu-pool on the 16 GiB SM8550 board, 1536 MiB);
     // this board has 4 GiB, so the default is 384 MiB; 0 = scattered BOs only.
     unsigned pool = 384;
@@ -1133,15 +1139,18 @@ bool naMetal(Session &s) {
     if (!accelerator) return stop(kIOReturnNoMemory);
     if (!accelerator->init()) {accelerator->release(); return stop(kIOReturnError);}
     // The two keys the original _MTLRegisterDevices helper reads (the plugin name is ours, no Apple device identity is claimed),
-    // and the one process whose open of this accelerator the kernel grants in place of the sandbox verdict
-    // (patches/xnu/zzw-native-adreno-sandbox-grant.patch).
+    // and the processes whose opens of this accelerator the kernel grants in place of the sandbox verdict
+    // (patches/xnu/zzw-native-adreno-sandbox-grant.patch): the render server, and the two that crashed in CoreImage's OpenGL ES path
+    // without a Metal device (iconservicesagent, and Settings' Accessibility page through MobileIcons; tb128fu-017/034/042). The GPU
+    // addon's NativeAdrenoMetal.clients names the same two (make-gpu-addon.py --clients).
     accelerator->setProperty("MetalPluginName", "NativeAdrenoMetal");
-    accelerator->setProperty("NativeSandboxGrantProcess", "backboardd");
+    accelerator->setProperty("NativeSandboxGrantProcess", "backboardd,iconservicesagent,Preferences");
     accelerator->setProperty("MetalPluginClassName", "NativeAdrenoMetalDevice");
-    // Turnip reports Vulkan 1.0 on a6xx gen1 (no hardware multiview) and metal2vulkan needs 1.2: the plugin puts this into TU_DEBUG
-    // before it loads Turnip (NativeAdrenoMetalPlugin.mm applyBoardTurnipDebug). noconform makes Turnip report 1.3; nocb keeps
-    // concurrent binning off as the plugin's own default does. Multiview stays without hardware support.
-    accelerator->setProperty("NativeTurnipDebug", "nocb,noconform");
+    // Turnip's options for this board, which replace the plugin's default "sysmem,nocb" (NativeAdrenoMetalPlugin.mm
+    // applyBoardTurnipDebug). Turnip reports Vulkan 1.0 on a6xx gen1 (no hardware multiview) and metal2vulkan needs 1.2: noconform
+    // makes it report 1.3. sysmem keeps every pass in system memory as the plugin's default does; the A610 has no concurrent
+    // binning (the A740 hang behind that default), so leaving it out lets Turnip pick tiled GMEM passes.
+    accelerator->setProperty("NativeTurnipDebug", "sysmem,nocb,noconform");
     n[29] = 4;
     if (!accelerator->attach(IOService::getPlatform())) {accelerator->release(); return stop(kIOReturnNotAttached);}
     accelerator->registerService();
@@ -1215,32 +1224,92 @@ unsigned copyRate() {
     return end > start ? unsigned((uint64_t(8) * kHalf * 19200000ull / (end - start)) >> 20) : 0;
 }
 
-// Stage 9: votes through the RPM (RpmGlink.cpp) before the GPU is powered, so PLL0 can start at twice 785 MHz (gpucc-khaje.c:
-// 785 MHz needs CX at NOM, its 1570 MHz VCO needs MX only at LOW_SVS, below what MX runs at anyway). The votes only go up: CX
-// at TURBO (one level above what 785 MHz needs, and above any level the boot loader's APPS vote would have asked for the display),
-// the DDR clock at the highest rate in the active and sleep sets. MX is left alone: the boot loader's vote stays in force. Any
-// failure keeps 320 MHz. The RPM's clock scaling switch ("clk0" 2 "Enab") is not touched: Linux first votes every RPM clock to its
-// maximum before turning it on, else the RPM may slow the buses nobody voted for.
+// The A610's levels (gpucc-khaje.c, speed bin 235) as PLL0 settings: the VCO runs at twice the gfx3d clock, 19.2 MHz x (L + alpha /
+// 65536) with a signed 16-bit alpha. gfx3d needs CX at LOW_SVS, SVS, SVS_PLUS, NOM, TURBO and TURBO_NO_CPR for these; the VCO needs
+// MX at LOW_SVS up to 1.8 GHz and SVS up to 2.4 GHz.
+struct GpuLevel {uint16_t mhz; uint16_t l; uint16_t alpha;};
+constexpr GpuLevel kLevels[] = {{320, 0x21, 0x5555}, {465, 0x30, 0x7000}, {600, 0x3f, 0x8000}, {785, 0x52, 0xc556},
+                                {1025, 0x6b, 0xc556}, {1114, 0x74, 0x2000}};
+constexpr unsigned kLevelCount = sizeof kLevels / sizeof kLevels[0], kBootLevel = 3;
+unsigned gTopLevel;   // the highest level the RPM votes allow; 0 keeps 320 MHz and no governor
+
+// Stage 9: votes through the RPM (RpmGlink.cpp) before the GPU is powered. The votes only go up and cover every level, so the
+// governor (dvfsThread) only reprograms PLL0: CX at TURBO_NO_CPR (what 1114.8 MHz needs), MX at TURBO (two levels above what a
+// 2.23 GHz VCO needs), the DDR clock at the highest rate, each in the active and sleep sets. Without MX the top is 785 MHz,
+// without CX nothing changes. The RPM's clock scaling switch ("clk0" 2 "Enab") is not touched: Linux first votes every RPM clock
+// to its maximum before turning it on, else the RPM may slow the buses nobody voted for.
 void dvfsPrepare() {
-    constexpr uint32_t kRwcx = 0x78637772, kClk2 = 0x326b6c63, kSwen = 0x6e657773, kVlvl = 0x6c766c76, kKhz = 0x007a484b;
-    constexpr uint32_t kCxTurbo = 0x180, kDdrMax = 0x7fffffff;
+    constexpr uint32_t kRwcx = 0x78637772, kRwmx = 0x786d7772, kClk2 = 0x326b6c63, kSwen = 0x6e657773, kVlvl = 0x6c766c76,
+                       kKhz = 0x007a484b;
+    constexpr uint32_t kCxTurboNoCpr = 0x1a0, kMxTurbo = 0x180, kDdrMax = 0x7fffffff;
     const unsigned before = copyRate();
     const int open = tb128fu_rpm_open();
-    int swen = 1, cxActive = 1, cxSleep = 1, ddrActive = 1, ddrSleep = 1;
+    int cx[3] = {1, 1, 1}, mx[3] = {1, 1, 1}, ddr[2] = {1, 1};   // swen, active, sleep
     if (!open) {
-        swen = tb128fu_rpm_request(0, kRwcx, 0, kSwen, 1);
-        cxActive = tb128fu_rpm_request(0, kRwcx, 0, kVlvl, kCxTurbo);
-        cxSleep = tb128fu_rpm_request(1, kRwcx, 0, kVlvl, kCxTurbo);
-        ddrActive = tb128fu_rpm_request(0, kClk2, 0, kKhz, kDdrMax);
-        ddrSleep = tb128fu_rpm_request(1, kClk2, 0, kKhz, kDdrMax);
+        cx[0] = tb128fu_rpm_request(0, kRwcx, 0, kSwen, 1);
+        cx[1] = tb128fu_rpm_request(0, kRwcx, 0, kVlvl, kCxTurboNoCpr);
+        cx[2] = tb128fu_rpm_request(1, kRwcx, 0, kVlvl, kCxTurboNoCpr);
+        mx[0] = tb128fu_rpm_request(0, kRwmx, 0, kSwen, 1);
+        mx[1] = tb128fu_rpm_request(0, kRwmx, 0, kVlvl, kMxTurbo);
+        mx[2] = tb128fu_rpm_request(1, kRwmx, 0, kVlvl, kMxTurbo);
+        ddr[0] = tb128fu_rpm_request(0, kClk2, 0, kKhz, kDdrMax);
+        ddr[1] = tb128fu_rpm_request(1, kClk2, 0, kKhz, kDdrMax);
         IOSleep(10);
     }
     const unsigned after = copyRate();
-    const bool raise = !open && !swen && !cxActive && !cxSleep;
-    if (raise) {gPllL = 0x52; gPllAlpha = 0xc556;}   // 1570 MHz: 19.2 MHz x (0x52 - 0x3aaa/65536), the alpha is signed
-    snprintf(tb128fu_gpu_dvfs, sizeof tb128fu_gpu_dvfs,
-        "GPU dvfs open %d | cx swen %d act %d sleep %d | ddr act %d sleep %d | copy %u -> %u MiB/s | gfx3d %u MHz L%x a%x",
-        open, swen, cxActive, cxSleep, ddrActive, ddrSleep, before, after, raise ? 785 : 320, gPllL, gPllAlpha);
+    const bool cxOk = !open && !cx[0] && !cx[1] && !cx[2], mxOk = cxOk && !mx[0] && !mx[1] && !mx[2];
+    gTopLevel = mxOk ? kLevelCount - 1 : cxOk ? kBootLevel : 0;
+    if (gTopLevel) {gPllL = kLevels[kBootLevel].l; gPllAlpha = kLevels[kBootLevel].alpha;}
+    snprintf(tb128fu_gpu_dvfs[0], sizeof tb128fu_gpu_dvfs[0],
+        "GPU dvfs open %d | cx %d %d %d mx %d %d %d ddr %d %d | copy %u -> %u MiB/s | boot %u MHz top %u MHz", open, cx[0], cx[1],
+        cx[2], mx[0], mx[1], mx[2], ddr[0], ddr[1], before, after, unsigned(kLevels[gTopLevel ? kBootLevel : 0].mhz),
+        unsigned(kLevels[gTopLevel].mhz));
+}
+
+// Moves the running PLL0 to a level as clk_zonda_pll_set_rate does (gpucc-khaje.c / clk-alpha-pll.c): ALPHA, then L, 5 us, the lock
+// bit (FREQ_LOCK_DET, bit 29, when TEST_CTL bit 16 STAY_IN_CFA is set, else LOCK_DET, bit 31), 100 us; then the gfx3d RCG re-latches
+// its unchanged CFG (0x101: PLL0 OUT_MAIN, divide by 1) with CMD UPDATE, as clk_rcg2 does after the parent's rate change.
+bool setLevel(const Session &s, unsigned level) {
+    const Region &c = s.gpucc;
+    wr(c, kPllAlpha, kLevels[level].alpha);
+    wr(c, kPllL, kLevels[level].l);
+    IODelay(5);
+    const uint32_t lock = (rd(c, kPllTest) & (1u << 16)) ? (1u << 29) : (1u << 31);
+    const bool locked = poll(c, kPllMode, lock, lock, 200);
+    IODelay(100);
+    set(c, kGfxCmd, 1);
+    return poll(c, kGfxCmd, 1, 0, 500) && locked;
+}
+
+// The governor: RBBM_STATUS sampled every millisecond, busy when any unit but the CX AHB master is (kgsl a6xx_hw_isidle); per
+// 50 samples, 35 busy or more jumps to the top level, fewer than 8 for ten windows in a row steps one level down. Row 1 every
+// 20 windows: the level, switches and failed ones, the newest window's load, ms at each level, STAY_IN_CFA.
+void dvfsThread(void *arg, wait_result_t) {
+    const Session &s = *static_cast<const Session *>(arg);
+    unsigned level = kBootLevel, quiet = 0, switches = 0, failed = 0;
+    uint32_t levelMs[kLevelCount] = {};
+    for (unsigned window = 0;; ++window) {
+        unsigned busy = 0;
+        for (unsigned i = 0; i < 50; ++i) {busy += (gr(s, 0x210) & 0x00fffffeu) != 0; IOSleep(1);}
+        unsigned target = level;
+        if (busy >= 35) {target = gTopLevel; quiet = 0;}
+        else if (busy < 8) {if (++quiet >= 10 && level) {target = level - 1; quiet = 0;}}
+        else quiet = 0;
+        if (target != level) {
+            if (setLevel(s, target)) {level = target; ++switches;} else ++failed;
+        }
+        levelMs[level] += 50;
+        if (window % 20 == 0)
+            snprintf(tb128fu_gpu_dvfs[1], sizeof tb128fu_gpu_dvfs[1],
+                "GPU dvfs now %u MHz | sw %u fail %u | busy %u%% | ms 320:%u 465:%u 600:%u 785:%u 1025:%u 1114:%u | cfa%u",
+                unsigned(kLevels[level].mhz), switches, failed, busy * 2, levelMs[0], levelMs[1], levelMs[2], levelMs[3], levelMs[4],
+                levelMs[5],
+                (rd(s.gpucc, kPllTest) >> 16) & 1);
+    }
+}
+void startDvfs(Session &s) {
+    thread_t thread = nullptr;
+    if (kernel_thread_start(dvfsThread, &s, &thread) == KERN_SUCCESS) thread_deallocate(thread);
 }
 }  // namespace
 
@@ -1275,6 +1344,7 @@ static void gpuThread(void *, wait_result_t) {
             rows(*s);
             if (tested && stage >= 8 && naMetal(*s)) tb128fu_gpu_stage_done = 8;
             rows(*s);
+            if (stage >= 9 && gTopLevel && tb128fu_gpu_stage_done >= 7) startDvfs(*s);
             naHeartbeat(*s);
         }
         if (!firstCommand(*s)) break;

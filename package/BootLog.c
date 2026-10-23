@@ -118,7 +118,7 @@ extern uint64_t cs_native4k_bytes __attribute__((weak_import)), cs_native4k_read
     cs_native4k_hash_ticks __attribute__((weak_import));
 // The RPM channel (RpmGlink.cpp) and the GPU clock votes of stage 9 (GpuProbe.cpp dvfsPrepare).
 extern char tb128fu_rpm_rows[3][120] __attribute__((weak_import));
-extern char tb128fu_gpu_dvfs[120] __attribute__((weak_import));
+extern char tb128fu_gpu_dvfs[2][120] __attribute__((weak_import));
 extern char native_gpu_coherence_row[120] __attribute__((weak_import));
 extern size_t boot_progress_profile_rows(char *, size_t) __attribute__((weak_import));
 extern volatile uint64_t native_gpu_idle_sleeps __attribute__((weak_import));
@@ -485,7 +485,9 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     for (unsigned r = 0; r < 3; ++r)
       if (tb128fu_rpm_rows[r][0]) at = put(out, at, cap, tb128fu_rpm_rows[r], sizeof tb128fu_rpm_rows[r]);
   }
-  if (&tb128fu_gpu_dvfs && tb128fu_gpu_dvfs[0]) at = put(out, at, cap, tb128fu_gpu_dvfs, sizeof tb128fu_gpu_dvfs);
+  if (&tb128fu_gpu_dvfs)
+    for (unsigned r = 0; r < 2; ++r)
+      if (tb128fu_gpu_dvfs[r][0]) at = put(out, at, cap, tb128fu_gpu_dvfs[r], sizeof tb128fu_gpu_dvfs[r]);
   // The IO-coherence proof (GpuPowerProbe coherenceProbe) and the maintenance passes it saved: map, unmap, submission, completion.
   if (&native_gpu_coherence_row && native_gpu_coherence_row[0]) {
     char row[260];
