@@ -116,6 +116,10 @@ def main():
                                    ('reg', struct.pack('<I', reg)),
                                    ('device_type', b'cpu\0'),
                                    ('compatible', b'arm,cortex-a53\0' if reg < LITTLE_CORES else b'arm,cortex-a73\0'),
+                                   # The kernel's two cluster types (ml_parse_cpu_topology reads a 1/2/4/8-byte integer): one
+                                   # processor set each under the Edge scheduler; utility and background work prefers the A53s,
+                                   # the rest the A73s (UniXNU patches/xnu/native-smp-type-clusters.patch).
+                                   ('cluster-type', b'E\0' if reg < LITTLE_CORES else b'P\0'),
                                    ('timebase-frequency', struct.pack('<I', TIMEBASE))])
             for index, reg in enumerate(cpu_regs)]
     tree = node('device-tree', [

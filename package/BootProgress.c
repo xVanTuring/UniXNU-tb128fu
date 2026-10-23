@@ -117,6 +117,7 @@ extern volatile unsigned boot_process_attempts __attribute__((weak_import));
 extern volatile unsigned boot_process_busy __attribute__((weak_import));
 static unsigned process_worker_status,process_capture_age;
 extern volatile uint32_t __attribute__((weak_import)) armcpu_smp_requested,armcpu_smp_running,armcpu_smp_conduit,armcpu_boot_mpidr;
+extern volatile uint32_t __attribute__((weak_import)) armcpu_init_completed;   // ml_cpu_init_completed called: the scheduler's cluster edges are set
 extern volatile uint32_t __attribute__((weak_import)) armcpu_smp_step[8],armcpu_smp_seen_mpidr[8],armcpu_smp_fail[8],armcpu_smp_sys[8][5],armcpu_boot_sys[5],armcpu_gic_stride,armcpu_gic_typer_probe[2];
 extern volatile int32_t __attribute__((weak_import)) armcpu_smp_psci_rc[8];
 extern volatile uint32_t __attribute__((weak_import)) armcpu_irq_phase,armcpu_irq_id,armcpu_quiesce_calls,armcpu_halt_calls;
@@ -322,8 +323,9 @@ static void draw(unsigned now) {
     snprintf(b,sizeof(b),"CPU IRQ phase=%u id=%u quiesce=%u halt=%u; phase 0=exit 2=clock 4=IPI 6=EOI; sleep-disabled=1",
       armcpu_irq_phase,armcpu_irq_id,armcpu_quiesce_calls,armcpu_halt_calls);line(37,b,0xffffff00);
     if(&armcpu_smp_requested){
-      unsigned n=(unsigned)snprintf(b,sizeof(b),"SMP req=%u run=%u cond=%u boot=%x |",
-        armcpu_smp_requested,armcpu_smp_running,armcpu_smp_conduit,armcpu_boot_mpidr&0xffffff);
+      unsigned n=(unsigned)snprintf(b,sizeof(b),"SMP req=%u run=%u cond=%u boot=%x init=%u |",
+        armcpu_smp_requested,armcpu_smp_running,armcpu_smp_conduit,armcpu_boot_mpidr&0xffffff,
+        &armcpu_init_completed?armcpu_init_completed:9);
       for(unsigned c=1;c<8&&n<sizeof(b)-14;++c)if(armcpu_smp_step[c]||armcpu_smp_psci_rc[c])
       {
         n+=(unsigned)snprintf(b+n,sizeof(b)-n," c%u=step%u",c,armcpu_smp_step[c]);
