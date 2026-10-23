@@ -1148,9 +1148,10 @@ bool naMetal(Session &s) {
     accelerator->setProperty("MetalPluginClassName", "NativeAdrenoMetalDevice");
     // Turnip's options for this board, which replace the plugin's default "sysmem,nocb" (NativeAdrenoMetalPlugin.mm
     // applyBoardTurnipDebug). Turnip reports Vulkan 1.0 on a6xx gen1 (no hardware multiview) and metal2vulkan needs 1.2: noconform
-    // makes it report 1.3. sysmem keeps every pass in system memory as the plugin's default does; the A610 has no concurrent
-    // binning (the A740 hang behind that default), so leaving it out lets Turnip pick tiled GMEM passes.
-    accelerator->setProperty("NativeTurnipDebug", "sysmem,nocb,noconform");
+    // makes it report 1.3. The plugin's default sysmem keeps every pass in system memory, against a hang of the A740's concurrent
+    // binning; the A610 has none, so without it Turnip picks tiled GMEM or system memory per pass (tb128fu-048 compares the two:
+    // with sysmem a compositor frame took about 10 ms and its scanout copy 6 ms at up to 1114.8 MHz).
+    accelerator->setProperty("NativeTurnipDebug", "nocb,noconform");
     n[29] = 4;
     if (!accelerator->attach(IOService::getPlatform())) {accelerator->release(); return stop(kIOReturnNotAttached);}
     accelerator->registerService();

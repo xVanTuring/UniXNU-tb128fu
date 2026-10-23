@@ -456,6 +456,11 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     for (unsigned i = 0; i < shown && used < sizeof row; ++i)
       used += (size_t)snprintf(row + used, sizeof row - used, " %x", d->marks[(total - shown + i) & 15]);
     at = put(out, at, cap, row, sizeof row);
+    // The plugin's two text lines: the scanout client's (PF frames/failures, last result, verified/mismatching rows, the last copy's
+    // ms and the mean per frame) or the raw test's, and the Turnip phase's.
+    char text[96];
+    if (d->report[0]) {snprintf(text, sizeof text, "[metal report] %.63s", d->report); at = put(out, at, cap, text, sizeof text);}
+    if (d->report2[0]) {snprintf(text, sizeof text, "[metal report2] %.63s", d->report2); at = put(out, at, cap, text, sizeof text);}
   }
   // The newest IOServiceOpen attempts, newest first: process, type, MACF open check and sandbox filter (0 = admitted), attach, F = not the plugin type.
   if (&native_adreno_open_log_count && native_adreno_open_log_count) {

@@ -221,7 +221,7 @@ kernel_args = [
   "sheng-data-persist=2",
   # Continuous on-screen bring-up page, tagged so a photograph says which image it is.
   "boot-progress=2",
-  "sheng-build-tag=tb128fu-047",
+  "sheng-build-tag=tb128fu-056",
   # Adreno 610 bring-up (package/GpuProbe.cpp): snapshot, power at 320 MHz, read-only view of the GPU's SMMU (all passed in
   # tb128fu-020), the TrustZone queries (tb128fu-021: SCM calls answer; IS_CALL_AVAIL(init_image) 1, PAS_IS_SUPPORTED(13) 0;
   # XNU manages 0x8487c000-0x18487c000, so gpu_region@55615000 is outside it). Stages 5 and 6 (a hand-built SMMU bank, the first
@@ -317,7 +317,9 @@ root_match_volume_uuid = "04769D26-2CA0-4825-B443-E2E5F88300F2"   # the OS volum
 # the Cortex-A73 cluster is presumably left at a low clock without a CPU frequency driver). tb128fu-009: the four
 # Cortex-A53 work. tb128fu-012's CpuFreq.c read the Cortex-A73 domain at 300 MHz (and not enabled while its cluster was off),
 # the Cortex-A53s at 1516 MHz; with tb128fu-cpufreq=1 both ask for their top level, so all eight again.
-cpu_regs = "0,1,2,3,0x100,0x101,0x102,0x103"
+# tb128fu-056 (experiment): the boot Cortex-A53 and the four Cortex-A73 only. The kernel has one CPU cluster and no AMP scheduling,
+# so with all eight the render server's thread committed 72% of its frames from a Cortex-A53 (round 055: 53 ms of CPU per frame).
+cpu_regs = "0,0x100,0x101,0x102,0x103"
 packed_data_ramdisk = true
 ipad_identity = true
 unique_chip_id = "required"          # the platform seed is not stored in any repository
