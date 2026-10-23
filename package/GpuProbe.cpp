@@ -1150,8 +1150,21 @@ bool naMetal(Session &s) {
     // applyBoardTurnipDebug). Turnip reports Vulkan 1.0 on a6xx gen1 (no hardware multiview) and metal2vulkan needs 1.2: noconform
     // makes it report 1.3. The plugin's default sysmem keeps every pass in system memory, against a hang of the A740's concurrent
     // binning; the A610 has none, so without it Turnip picks tiled GMEM or system memory per pass (tb128fu-048 compares the two:
-    // with sysmem a compositor frame took about 10 ms and its scanout copy 6 ms at up to 1114.8 MHz).
-    accelerator->setProperty("NativeTurnipDebug", "nocb,noconform");
+    // with sysmem a compositor frame took about 10 ms and its scanout copy 6 ms at up to 1114.8 MHz). With each command buffer's GPU
+    // time (home screen strokes, 5 or more passes): 068 per-pass choice and 069 forced GMEM about 8 ms per Mpx of pass area (Turnip
+    // already chose GMEM: every pipeline ordered its attachment access, which makes a sysmem pass single-primitive); 070 orders only
+    // the fetching pipelines (bridge patch 0009), no change; 071 forced system memory: 7.1 ms per Mpx, 11% less, so neither mode is
+    // where the time goes.
+    accelerator->setProperty("NativeTurnipDebug", "nocb,noconform,sysmem");
+    // Turnip's printed GPU trace in the render server (NativeAdrenoMetalPlugin.mm applyBoardTurnipDebug): each render pass and command
+    // buffer with its GPU time, size, draw count and per-pixel load and store bytes, exported as gputrace.txt (tb128fu-072). 072: half
+    // the GPU time lay outside render passes, about 4 ms before a command buffer's first pass and 3.5 ms after its last; copies and
+    // blits share the clear_blit toggle (073: textures over surfaces copied in from their buffers before a pass, 3 ms a full-screen
+    // one, and back after it, 2.1 ms; 14 MiB of trace overflowed the reader's 32 MiB export copy). Off unless a round asks for it.
+    static constexpr bool kTurnipTrace = false;
+    if (kTurnipTrace)
+        accelerator->setProperty("NativeTurnipTrace",
+                                 "-all,+cmd_buffer,+render_pass,+sysmem_clear,+sysmem_clear_all,+clear_blit,+compute,+compute_indirect");
     n[29] = 4;
     if (!accelerator->attach(IOService::getPlatform())) {accelerator->release(); return stop(kIOReturnNotAttached);}
     accelerator->registerService();
