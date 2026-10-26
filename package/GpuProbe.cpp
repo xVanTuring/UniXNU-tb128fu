@@ -1311,11 +1311,13 @@ struct RpmClock {uint32_t type, id, key, value;};
 constexpr uint32_t kClk0 = 0x306b6c63, kClk1 = 0x316b6c63, kClk2 = 0x326b6c63, kClka = 0x616b6c63, kCe = 0x6563, kIpa = 0x617069,
                    kQup = 0x707571, kMmxi = 0x69786d6d, kEnab = 0x62616e45, kSwen = 0x6e657773, kKhz = 0x007a484b,
                    kIntMaxKhz = 2147484;   // DIV_ROUND_UP(INT_MAX, 1000)
-// clk-smd-rpm.c bengal_clks: bi_tcxo, cnoc, bimc, snoc, qdss, ce1, ipa, qup, mmnrt, mmrt, snoc_periph, snoc_lpass, rf_clk1, rf_clk2.
+// clk-smd-rpm.c bengal_clks: bi_tcxo, cnoc, bimc, snoc, qdss, ce1, ipa, qup, mmnrt, mmrt, snoc_periph, rf_clk1, rf_clk2. Not
+// snoc_lpass ("clk1" 5): tb128fu-090 acknowledged the 22 votes before it, and its active-set vote stopped the RPM in
+// rpm_err_fatal (the LPASS, whose bus it is, is not started here).
 constexpr RpmClock kRpmClocks[] = {
     {kClk0, 0, kEnab, 1}, {kClk1, 1, kKhz, kIntMaxKhz}, {kClk2, 0, kKhz, kIntMaxKhz}, {kClk1, 2, kKhz, kIntMaxKhz},
     {kClk0, 1, kEnab, 1}, {kCe, 0, kKhz, kIntMaxKhz}, {kIpa, 0, kKhz, kIntMaxKhz}, {kQup, 0, kKhz, kIntMaxKhz},
-    {kMmxi, 0, kKhz, kIntMaxKhz}, {kMmxi, 1, kKhz, kIntMaxKhz}, {kClk1, 0, kKhz, kIntMaxKhz}, {kClk1, 5, kKhz, kIntMaxKhz},
+    {kMmxi, 0, kKhz, kIntMaxKhz}, {kMmxi, 1, kKhz, kIntMaxKhz}, {kClk1, 0, kKhz, kIntMaxKhz},
     {kClka, 4, kSwen, 1}, {kClka, 5, kSwen, 1}};
 constexpr unsigned kRpmClockCount = sizeof kRpmClocks / sizeof kRpmClocks[0];
 unsigned elapsedSeconds() {
