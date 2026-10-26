@@ -63,7 +63,7 @@ int get_preemption_level(void);
 extern const uint8_t tb128fu_gpu_zap[], tb128fu_gpu_sqe[];
 extern const uint32_t tb128fu_gpu_zap_size, tb128fu_gpu_sqe_size;
 #include "AdrenoPM4.h"
-// NativeAdreno (scripts/build-native-adreno-a6xx.py) and the GPU interrupt line of ArmCpu.
+// NativeAdreno (scripts/build-adreno610.py) and the GPU interrupt line of ArmCpu.
 IOReturn NativeAdrenoGpuContextBringup(volatile uint8_t *, size_t, unsigned, unsigned, unsigned, unsigned, unsigned, unsigned,
                                        void (*)(uint32_t), NativeAdrenoGmuContextReport *);
 IOReturn NativeAdrenoGpuContextBuffers(NativeAdrenoGpuBuffer out[5]);
@@ -75,7 +75,7 @@ IOService *native_adreno_published_service();
 extern volatile uint32_t native_adreno_smmu_coherent_walk, native_adreno_pool_mib, native_adreno_wc_enabled, native_adreno_pool_status,
     native_adreno_pool_wc, native_adreno_pool_stats[8], native_adreno_written_imports_owned;
 IOReturn armcpu_spi_attach(uint32_t intid, bool edge, void (*handler)(void *), void *context, uint32_t *readback, uint64_t *router);
-// The staged AGXAccelerator (drivers/NativeAdreno/NativeAdrenoAccelerator.cpp, build-native-adreno-accelerator.py): its static
+// The staged AGXAccelerator (drivers/Adreno610/NativeAdrenoAccelerator.cpp, build-native-adreno-accelerator.py): its static
 // initializer runs only after the original IOGPUFamily kext has loaded, because the parent metaclass does not exist before that.
 void native_adreno_accelerator_static_init(void) __asm__("__GLOBAL__sub_I_NativeAdrenoAccelerator.cpp");
 IOService *native_adreno_accelerator_allocate(void);
@@ -899,7 +899,7 @@ bool naCp(Session &s) {
     gw64(s, 0x830, s.nb[0].iova);                                        // CP_SQE_INSTR_BASE, before CP_SQE_CNTL
     // Ring 0: 32 KiB at its IOVA, the memptrs page for the fence; A6XX forms (NO_UPDATE, CACHE_FLUSH_TS fences).
     n[4] = 4; mark(s, 84);
-    gRio = NativeAdrenoRingIo{&s, naWrite, naRead, naBarrier};
+    gRio = NativeAdrenoRingIo{&s, naWrite, naRead, naBarrier, nullptr, nullptr};   // no GMU, so no AHB fence to check
     gRing = new NativeAdrenoRing;
     gCpInit = new NativeAdrenoCpInit;
     if (!gRing || !gCpInit || gRing->setGeneration(6)) {fail(84, -12); return false;}

@@ -1,5 +1,5 @@
 # Kernel configuration of the TB128FU image: the generic CPU, interrupt, timer and platform expert path, the source
-# corecrypto and pthread providers, NativeAES and the SM6225 UFS root with the owner root policy.
+# corecrypto and pthread providers, SoftwareAES and the SM6225 UFS root with the owner root policy.
 # CONFIG_XNU_<NAME> becomes XNU_<NAME> for the kernel build.
 #
 # Still left out: SOURCE_MOCKFS (no fixture root).
@@ -17,10 +17,11 @@ CONFIG_XNU_NATIVE_AES=y
 # in the userdata policy directory (SHNGPOL1) and are read at run time. The static 70 MB bundle is not
 # linked, so the kernel stays in the 96 MiB boot partition.
 CONFIG_XNU_NATIVE_UFS=y
+CONFIG_XNU_NATIVE_UFS_ARCHIVE="{tree}/build/tb128fu-ufs/libTb128fuUfs.a"
 # Verified variant: its root authorization query is what the owner chain below calls. No virtio device
 # exists on this board, so its own block transport never configures.
 CONFIG_XNU_NATIVE_VIRTIO_BLOCK=y
-CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE="{tree}/build/native-virtio-block-verified/libNativeVirtioBlock.a"
+CONFIG_XNU_NATIVE_VIRTIO_BLOCK_ARCHIVE="{tree}/build/virtio-mmio-block-verified/libVirtioMmioBlock.a"
 # The Data seed: a packed APFS scratch volume published as a RAM block device.
 CONFIG_XNU_NATIVE_RAM_BLOCK=y
 # Owner root chain, the same ladder as UniXNU-sheng: audit/trust the verified root, mount the SystemOS
@@ -61,6 +62,7 @@ CONFIG_XNU_ARMVIRT_PLATFORM=n
 # The display as on UniXNU-qemu: NativeLegacyDisplay (a subclass of the original IOMobileFramebufferLegacy) on the firmware
 # frame buffer, QuartzCore's CPU renderer, the key store stand-in and the HID input (scripts/build-native-legacy-display.py).
 CONFIG_XNU_NATIVE_LEGACY_DISPLAY=y
-# The Adreno 610 half of NativeAdreno (scripts/build-native-adreno-a6xx.py): no personality; the board's GPU probe
+# The Adreno 610 half of NativeAdreno (scripts/build-adreno610.py): no personality; the board's GPU probe
 # (tb128fu-gpu=7) brings the context up, publishes the GPU and the staged accelerator.
 CONFIG_XNU_NATIVE_ADRENO=y
+CONFIG_XNU_NATIVE_ADRENO_ARCHIVE="{tree}/build/adreno610/libAdreno610.a"

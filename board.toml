@@ -38,38 +38,39 @@ windows = [
 
 [kernel]
 defconfig = "tb128fu_defconfig"
-# Archive builders of the kernel step, in order; the ones tb128fu_defconfig links. build-arm-driver.py is the generic
-# driver builder of UniXNU-sheng.
+# Archive builders of the kernel step, in order; the ones tb128fu_defconfig links. build-arm-driver.py is UniXNU's generic
+# driver builder, which finds each component in UniXNU's components.toml.
 archives = [
   "build-corecrypto-14.py",
   "build-corecrypto-14.py --namespace",
   "build-arm-driver.py ArmDTPlatform",
   "build-arm-driver.py ArmCpu",
-  "build-arm-driver.py NativeAES",
-  "build-arm-driver.py NativeUfs --sm6225",
-  "build-arm-driver.py NativeVirtioBlock --verified-root",
-  "build-native-virtio-bindings.py --component NativeVirtioBlock --directory build/native-virtio-block-verified",
-  "build-arm-driver.py NativeRamBlock",
-  "build-native-virtio-bindings.py --component NativeRamBlock --directory build/native-ram-block",
-  "build-native-aes-bindings.py",
+  "build-arm-driver.py SoftwareAES",
+  # drivers/Tb128fuUfs: the SM6225 host with the verified block device and root publication.
+  "build-arm-driver.py Tb128fuUfs --sm6225",
+  "build-arm-driver.py VirtioMmioBlock --verified-root",
+  "build-virtio-mmio-bindings.py --component VirtioMmioBlock --directory build/virtio-mmio-block-verified",
+  "build-arm-driver.py RamBlock",
+  "build-virtio-mmio-bindings.py --component RamBlock --directory build/ram-block",
+  "build-software-aes-bindings.py",
   "build-libpthread-kernel.py",
   "build-link-stubs.py",
   "build-platform-power.py",
   # The 395-byte owner root anchor and the XNU crypto adapter; the signed envelopes are in userdata,
   # built with `unixnu build userdata --root-policy OS=... --root-policy SystemOS=...`.
   "build-verified-root-key.py --pin 70a5ea346d2d779a7ef43eb4ed8b17f54488e160d8c2a6d6420969664e3ae798",
-  # The Adreno 610 half of NativeAdreno (no GMU) with the SMMU and PM4 kits (CONFIG_XNU_NATIVE_ADRENO), then the staged
-  # accelerator class added to the same archive.
-  "build-native-adreno-a6xx.py",
-  "build-native-adreno-accelerator.py",
+  # Adreno610, the Adreno 610 half of NativeAdreno (no GMU), with the SMMU and PM4 kits (CONFIG_XNU_NATIVE_ADRENO), then the
+  # staged accelerator class added to the same archive.
+  "build-adreno610.py",
+  "build-adreno740-accelerator.py --component Adreno610",
   # The display, key store stand-in and HID input (CONFIG_XNU_NATIVE_LEGACY_DISPLAY); it reads the previous kernel step's
   # kernel.macho and UniXNU-qemu's display reference (see its header).
-  "build-native-legacy-display.py",
+  "build-gop-legacy-display.py",
 ]
 
 # The same original kernelcache and prelink selection as UniXNU-sheng: the target image is the same.
 [kernel.prelink]
-tool = "kits/NativePrelink/emit_prelink.py"
+tool = "kits/XnuPrelink/emit_prelink.py"
 kernel = "build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped.noctf"
 kernelcache_sha256 = "f18b4df865405f2a287b84977d7aca745e056d656d9fc9df1662970ce2969de7"
 slide = "-0x1000000"
@@ -239,7 +240,7 @@ kernel_args = [
   # frame buffer with the GPU. tb128fu-039 rendered with Metal but the display driver copied every frame with the CPU, and its two
   # content scans of the first frames read the uncached GPU surface pixel by pixel: 1.2 to 1.4 s from swap to scanout (copy 76 ms).
   "sheng-fb-gpu=1",
-  # A fixed 60 Hz for the render server (drivers/NativeMobileDisplay, the tb128fu branch): a work-loop tick stands in for the GOP
+  # A fixed 60 Hz for the render server (drivers/GopFramebuffer, the tb128fu branch): a work-loop tick stands in for the GOP
   # scanout's missing vblank, and the refresh attributes report 60 Hz as both the minimum and the maximum rate. With the generic
   # 24 to 60 Hz range the render server settled at 24 Hz (tb128fu-046: swaps every 41.7 ms, each frame done in 11 to 19 ms).
   "sheng-vsync=60",

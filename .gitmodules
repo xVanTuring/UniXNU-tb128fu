@@ -1,14 +1,14 @@
 [submodule "drivers/NativeAdreno"]
-	path = drivers/NativeAdreno
-	url = https://github.com/xVanTuring/NativeAdreno.git
+	path = drivers/Adreno610
+	url = https://github.com/xVanTuring/Adreno610.git
 	branch = tb128fu
 [submodule "drivers/NativeMetal"]
-	path = drivers/NativeMetal
-	url = https://github.com/xVanTuring/NativeMetal.git
+	path = drivers/AdrenoMetal
+	url = https://github.com/xVanTuring/AdrenoMetal.git
 	branch = tb128fu
 [submodule "drivers/NativeUfs"]
-	path = drivers/NativeUfs
-	url = https://github.com/xVanTuring/NativeUfs.git
+	path = drivers/Tb128fuUfs
+	url = https://github.com/xVanTuring/Tb128fuUfs.git
 	branch = tb128fu
 [submodule "drivers/ArmCpu"]
 	path = drivers/ArmCpu
@@ -19,6 +19,9 @@
 	url = https://github.com/xVanTuring/ArmSmmu4K.git
 	branch = tb128fu
 [submodule "drivers/NativeMobileDisplay"]
-	path = drivers/NativeMobileDisplay
-	url = https://github.com/xVanTuring/NativeMobileDisplay.git
+	path = drivers/GopFramebuffer
+	url = https://github.com/xVanTuring/GopFramebuffer.git
 	branch = tb128fu
+[submodule "drivers/ShengHidInput"]
+	path = drivers/ShengHidInput
+	url = https://github.com/UniXNU/ShengHidInput.git

@@ -1,5 +1,5 @@
 #!/opt/homebrew/bin/bash
-# Tools the GPU user-space build needs on this Mac (UniXNU scripts/build-turnip-darwin.py, build-native-metal-bridge.py,
+# Tools the GPU user-space build needs on this Mac (UniXNU scripts/build-turnip-darwin.py, build-adreno-metal-bridge.py,
 # build-adreno-metal-plugin.py), for the TB128FU tree: glslangValidator, a current bison, glslc (shaderc: the plugin's smoke
 # shaders, gen-turnip-smoke-shaders.py) and the Vulkan headers (check-turnip-darwin-host.py's host smoke) from Homebrew, a Python venv with
 # meson and Mesa's generator modules at <tree>/.cache/mesa-venv, bison linked into <tree>/.cache/mesa-tools/bin (both put on

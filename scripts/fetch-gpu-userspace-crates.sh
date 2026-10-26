@@ -1,5 +1,5 @@
 #!/opt/homebrew/bin/bash
-# Downloads the Rust crates of the native Metal bridge (UniXNU scripts/build-native-metal-bridge.py: the pinned metal2vulkan runtime
+# Downloads the Rust crates of the native Metal bridge (UniXNU scripts/build-adreno-metal-bridge.py: the pinned metal2vulkan runtime
 # behind a C ABI) for the TB128FU tree, so the later builds run offline. Run it yourself once:
 #   ./scripts/fetch-gpu-userspace-crates.sh
 # MIRROR=rsproxy takes crates.io from rsproxy.cn, MIRROR=ustc from mirrors.ustc.edu.cn; without MIRROR, crates.io itself.
@@ -10,7 +10,7 @@ TREE=${TB128FU_TREE:-$(cd "$(dirname "$0")/../.." && pwd)/UniXNU/out/tb128fu/tre
 [ -d "$TREE/.cache/gpu-reference/metal2vulkan/.git" ] || { echo "no metal2vulkan checkout under $TREE/.cache/gpu-reference"; exit 1; }
 
 # The bridge's Cargo.toml, written exactly as the build writes it (patched translator source, fixtures), without running cargo.
-manifest=$(python3 "$TREE/scripts/build-native-metal-bridge.py" --manifest-only | tail -1)
+manifest=$(python3 "$TREE/scripts/build-adreno-metal-bridge.py" --manifest-only | tail -1)
 [ -f "$manifest" ] || { echo "manifest not written"; exit 1; }
 
 config=()

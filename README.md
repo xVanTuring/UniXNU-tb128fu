@@ -32,14 +32,14 @@ into it.
 | --- | --- |
 | `board.toml` | Board, IPSW, firmware, payload and ADT settings |
 | `configs/tb128fu_defconfig` | Kernel configuration of the first image |
-| `scripts/build-arm-driver.py` | The generic driver archive builder, copied unchanged from UniXNU-sheng |
+| `drivers/` | This board's drivers under UniXNU's component names (UniXNU `components.toml`): Adreno610 and Tb128fuUfs, the forks of Adreno740 and ShengUfs for this board's hardware; AdrenoMetal, GopFramebuffer and ArmCpu (branch `tb128fu` of the forks under the same names); ShengHidInput as UniXNU publishes it |
 | `scripts/build-platform-power.py`, `package/ShengPlatformPower.cpp` | The original-PMGR bridge of UniXNU-sheng, which accesses no hardware |
 | `scripts/make-tb128fu-adt.py` | Apple device tree for SM6225: GICv3 0x0f200000/0x0f300000, stride 0x20000, A53/A73 cores numbered by cluster, 19.2 MHz timebase |
 | `scripts/check-tb128fu.py` | Firmware preflight: UniXNU integration, FD and stack against the memory map, Mu-only inputs, splash region |
 | `scripts/patch-xnu-entry-probe.py`, `scripts/xnu-panic-screen.c` | Copied unchanged from UniXNU-sheng; the payload uses them for the on-screen panic text (there is no UART) |
-| `scripts/build-native-legacy-display.py`, `package/LegacyDisplayProbe.cpp` | The display, key store stand-in and HID input of UniXNU-qemu on the firmware frame buffer, with the board's touch and GPU probes |
+| `scripts/build-gop-legacy-display.py`, `package/LegacyDisplayProbe.cpp` | The display, key store stand-in and HID input of UniXNU-qemu on the firmware frame buffer, with the board's touch and GPU probes |
 | `package/TouchProbe.cpp`, `package/HimaxProtocol.[ch]`, `package/TouchBoard.h` | The Himax HX83102E touch driver (GENI SPI, zero-flash firmware download, event loop); host tests in `package/HimaxProtocolTests.c` |
-| `package/GpuProbe.cpp`, `scripts/build-native-adreno-a6xx.py` | Adreno 610 bring-up (`tb128fu-gpu=<stage>`) and the a6xx build of NativeAdreno without a GMU |
+| `package/GpuProbe.cpp`, `scripts/build-adreno610.py` | Adreno 610 bring-up (`tb128fu-gpu=<stage>`) and the a6xx build of NativeAdreno without a GMU |
 | `package/BootLog.c`, `package/BootReset.c`, `package/linux-log/`, `scripts/read-tb128fu-log.py` | The boot log written to userdata, the PMIC reset back to fastboot, and the USB log reader image |
 | `package/CpuFreq.c` | CPU frequency of both clusters |
 | `scripts/setup-gpu-userspace-tools.sh`, `scripts/fetch-gpu-userspace-crates.sh` | Host tools and Rust crates for the GPU user space; run them yourself |
@@ -177,7 +177,7 @@ tree is the source of the memory and SoC values; `boot_a` is the stock Lenovo im
 | DRAM | `/memory`: 0x40000000+0x3cc00000, 0x80000000+0x40000000, 0xc0000000+0x100000000; 5.95 GiB total, 0x7cc00000..0x80000000 is a hole | `dram_size = 0x180000000` (span to 0x1c0000000); `MemoryMapLib` exposes 0x80000000+0x140000000 |
 | DarwinBoot window | the free 0x80000000..0x1c0000000 run | `owned_memory_size = 0x80000000` (2 GiB first; 4 GiB can be tried later) |
 | userdata | sda18, LBA 0x222f31..0x1c457fa, 4096-byte blocks (104.5 GiB) | `[userdata]` |
-| Storage | Samsung UFS 2.2 KM2L9001CM-B518, ufshc 0x04804000, 6 LUNs, GCC UFS 0x45000, apps SMMU 0x0c600000, stream 0x60 | `drivers/NativeUfs` (`--sm6225`), `GccUfs.h` |
+| Storage | Samsung UFS 2.2 KM2L9001CM-B518, ufshc 0x04804000, 6 LUNs, GCC UFS 0x45000, apps SMMU 0x0c600000, stream 0x60 | `drivers/Tb128fuUfs` (`--sm6225`), `GccUfs.h` |
 | Boot image of the stock `boot` | header v2, page 4096, base 0, kernel 0x8000, ramdisk 0x1000000, tags 0x100, no dtb fields; no `vendor_boot`; slot `_a` | this repository uses header v1, base 0x80000000, kernel 0x80008000, ramdisk 0x81000000, tags 0x80000100, page 4096 |
 | DTB | 18 DTBs appended to the stock boot image; `dtb_idx=8` is the Khaje SoC base and `dtbo_idx=12` is the Lenovo overlay; the merged live tree is "KHAJE IDP nopmi", board-id 0x10022 | `Resources/DTBs/tb128fu.dtb` is the merged live tree, sanitized |
 | Panel | `mdss_dsi_hx83102p_boe_2k_video`, 1200×2000, 60 Hz, video mode; `cont_splash_region` 0x5c000000+0xf00000 | SimpleFbDxe 1200×2000×32; "Display Reserved" descriptor |
@@ -227,13 +227,13 @@ tree is the source of the memory and SoC values; `boot_a` is the stock Lenovo im
 
   If it still loops, boot Android and zero the first 64 bytes of `/dev/block/by-name/misc` as root, then reboot. The
   boot-once command is only 32 bytes; the rest of the partition is left alone.
-- NativeUfs SM6225 facts are in `drivers/NativeUfs/GccUfs.h` of the UniXNU checkout (GCC UFS block 0x45000, host
+- NativeUfs SM6225 facts are in `drivers/Tb128fuUfs/GccUfs.h` of this repository (GCC UFS block 0x45000, host
   0x04804000, apps SMMU 0x0c600000, UFS stream 0x60, userdata LBA 0x222f31..0x1c457fa). The full verified block class is
-  linked through `build-arm-driver.py NativeUfs --sm6225`; `build-native-virtio-bindings.py` binds the original
+  linked through `build-arm-driver.py Tb128fuUfs --sm6225`; `build-virtio-mmio-bindings.py` binds the original
   `IOBlockStorageDevice` symbols to the prelinked IOStorageFamily. The kernel reads `SHNGROOT` and `SHNGPOL1` from
   userdata, loads the signed OS/SystemOS envelopes into read-only kernel memory and publishes one block device per
   window. `native-ufs-root-noverify=1` (in `boot-root.img`) publishes the same windows without the policy check as a
-  control. The QEMU root-path test (`drivers/NativeUfs/tests/check_qemu_root_commands.py`) covers the layout, policy
+  control. The QEMU root-path test (`drivers/Tb128fuUfs/tests/check_qemu_root_commands.py`) covers the layout, policy
   directory, signature and block reads on the host.
 - `boot-green.img`, the SEC-only green-screen diagnostic, is in `out/tb128fu/boot/stale/` with the other images of the
   first kernel. A green screen proves the panel is still scanning out and the frame-buffer address/geometry are usable.
@@ -255,5 +255,5 @@ tree is the source of the memory and SoC values; `boot_a` is the stock Lenovo im
 ## License
 
 BSD-2-Clause-Patent. See [LICENSE](LICENSE). `make-tb128fu-adt.py` is derived from `make-sheng-adt.py` of
-UniXNU-sheng and `make-pipa-adt.py`; `build-arm-driver.py` and the two panic-screen files are copies from it.
+UniXNU-sheng and `make-pipa-adt.py`; the two panic-screen files are copies from it.
 `ShengPlatformPower.cpp` comes from it under MIT (its SPDX header).

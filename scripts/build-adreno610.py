@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-"""NativeAdreno for the TB128FU's Adreno 610 (a6xx without a GMU): build/native-adreno/libNativeAdreno.a, the archive that
-CONFIG_XNU_NATIVE_ADRENO links. UniXNU-sheng builds the same archive from NativeAdrenoService.cpp plus the GMU and HFI kits
-(build-arm-driver.py NativeAdreno, build-native-adreno-kits.py); this board has no GMU, so the archive holds only the GPU
-context, ring, submission, timer, user client and publication objects with the SMMU and PM4 kits, and the board probe
-(package/GpuProbe.cpp, tb128fu-gpu=7) drives them. build-native-adreno-accelerator.py runs next and adds the staged
-accelerator class to this archive. No firmware is embedded here: the SQE and zap images are the board probe's
-(build-native-legacy-display.py)."""
+"""Adreno610 (drivers/Adreno610, NativeAdreno for the TB128FU's Adreno 610: a6xx without a GMU): build/adreno610/libAdreno610.a,
+the archive that CONFIG_XNU_NATIVE_ADRENO links (CONFIG_XNU_NATIVE_ADRENO_ARCHIVE). UniXNU-sheng builds Adreno740's archive from
+NativeAdrenoService.cpp plus the GMU and HFI kits (build-arm-driver.py Adreno740, build-adreno740-kits.py); this board has no GMU,
+so the archive holds only the GPU context, ring, submission, timer, user client and publication objects with the SMMU and PM4
+kits, and the board probe (package/GpuProbe.cpp, tb128fu-gpu=7) drives them. build-adreno740-accelerator.py --component
+Adreno610 runs next and adds the staged accelerator class to this archive. No firmware is embedded here: the SQE and zap images
+are the board probe's (build-gop-legacy-display.py)."""
 import json, re, subprocess, sys
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 c_recipe = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/bsd/DEVELOPMENT/bsd_init.o.json').read_text().strip().rstrip(','))
 cxx_recipe = json.loads((ROOT / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_text().strip().rstrip(','))
-out = ROOT / 'build/native-adreno'
+out = ROOT / 'build/adreno610'
 out.mkdir(parents=True, exist_ok=True)
-driver = ROOT / 'drivers/NativeAdreno'
+driver = ROOT / 'drivers/Adreno610'
 sources = sorted((ROOT / 'kits/ArmSmmu4K').glob('ArmSmmu4K*.c')) + [ROOT / 'kits/AdrenoPM4/AdrenoPM4.c']
 # The GPU half of NativeAdreno. Left out: the GMU and its platform nodes, the HFI firmware path, the service that starts
-# them (NativeAdrenoService.cpp) and its board glue, and the accelerator (built staged by build-native-adreno-accelerator.py).
+# them (NativeAdrenoService.cpp) and its board glue, and the accelerator (built staged by build-adreno740-accelerator.py).
 sources += [driver / (name + '.cpp') for name in (
     'NativeAdrenoGpuContext', 'NativeAdrenoSmmuContext', 'NativeAdrenoSmmuMemory',
     'NativeAdrenoMemory', 'NativeAdrenoCpu', 'NativeAdrenoVm', 'NativeAdrenoRing', 'NativeAdrenoSubmit', 'NativeAdrenoTimer',
@@ -49,7 +49,7 @@ for source in sources:
     if result.returncode:
         sys.exit(str(source) + ':\n' + result.stderr[-2500:])
     objects.append(obj)
-archive = out / 'libNativeAdreno.a'
+archive = out / 'libAdreno610.a'
 archive.unlink(missing_ok=True)
 subprocess.run(['xcrun', 'ar', 'rcs', archive, *objects], check=True)
 # Every NativeAdreno or kit symbol the objects use must be defined by them; the rest is the kernel's.
