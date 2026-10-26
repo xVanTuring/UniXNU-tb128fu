@@ -47,6 +47,10 @@ char tb128fu_gpu_rows[16][120];
 // Stage 9: the RPM votes, the memory copy rate before and after the DDR vote and the boot clock (dvfsPrepare); the governor's
 // level, switches, load and time at each level (dvfsThread).
 char tb128fu_gpu_dvfs[2][120];
+// The memory controller's clock and the CPU's read and copy rates before and after the DDR vote (dvfsPrepare); the clock as the
+// governor samples it, lowest and highest of each second (dvfsThread).
+char tb128fu_ddr_rows[2][120];
+int cpu_number(void);
 int tb128fu_rpm_open(void);
 int tb128fu_rpm_request(uint32_t set, uint32_t type, uint32_t id, uint32_t key, uint32_t value);
 volatile unsigned tb128fu_gpu_stage_req, tb128fu_gpu_stage_done, tb128fu_gpu_step;
@@ -1247,6 +1251,41 @@ unsigned copyRate() {
     return end > start ? unsigned((uint64_t(8) * kHalf * 19200000ull / (end - start)) >> 20) : 0;
 }
 
+// MiB/s of reading 32 MiB twice with eight loads per step, and the CPUs it began and ended on (0-3 Cortex-A53, 4-7 Cortex-A73).
+volatile uint64_t gReadSink;
+unsigned readRate(unsigned &first, unsigned &last) {
+    constexpr size_t kBytes = 32u << 20;
+    uint64_t *buffer = static_cast<uint64_t *>(IOMallocAligned(kBytes, 1u << 14));
+    if (!buffer) return 0;
+    memset(buffer, 0x5a, kBytes);
+    first = unsigned(cpu_number());
+    uint64_t start, end, sum = 0;
+    __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(start));
+    for (unsigned pass = 0; pass < 2; ++pass)
+        for (size_t i = 0; i < kBytes / 8; i += 8)
+            sum += buffer[i] ^ buffer[i + 1] ^ buffer[i + 2] ^ buffer[i + 3] ^ buffer[i + 4] ^ buffer[i + 5] ^ buffer[i + 6] ^ buffer[i + 7];
+    __asm__ volatile("isb\n\tmrs %0, cntpct_el0" : "=r"(end));
+    last = unsigned(cpu_number());
+    gReadSink = sum;
+    IOFreeAligned(buffer, kBytes);
+    return end > start ? unsigned((uint64_t(2) * kBytes * 19200000ull / (end - start)) >> 20) : 0;
+}
+
+// The memory controller clock in MHz: MCCC (the DT's syscon 0x447d200) + 0x20 holds its period in picoseconds (debugcc-khaje.c
+// mc_cc_debug_mux period_offset; clk-debug.c: rate = 10^12 / period). Mapped once, never unmapped.
+IOMemoryMap *gMcccMap;
+unsigned ddrMhz() {
+    if (!gMcccMap) {
+        IODeviceMemory *memory = IODeviceMemory::withRange(0x447d000, 0x1000);
+        if (!memory) return 0;
+        gMcccMap = memory->map(kIOMapAnywhere | kIOMapInhibitCache);
+        memory->release();
+        if (!gMcccMap) return 0;
+    }
+    const uint32_t period = *reinterpret_cast<volatile uint32_t *>(gMcccMap->getVirtualAddress() + 0x220);
+    return period ? 1000000u / period : 0;
+}
+
 // The A610's levels (gpucc-khaje.c, speed bin 235) as PLL0 settings: the VCO runs at twice the gfx3d clock, 19.2 MHz x (L + alpha /
 // 65536) with a signed 16-bit alpha. gfx3d needs CX at LOW_SVS, SVS, SVS_PLUS, NOM, TURBO and TURBO_NO_CPR for these; the VCO needs
 // MX at LOW_SVS up to 1.8 GHz and SVS up to 2.4 GHz.
@@ -1265,6 +1304,8 @@ void dvfsPrepare() {
     constexpr uint32_t kRwcx = 0x78637772, kRwmx = 0x786d7772, kClk2 = 0x326b6c63, kSwen = 0x6e657773, kVlvl = 0x6c766c76,
                        kKhz = 0x007a484b;
     constexpr uint32_t kCxTurboNoCpr = 0x1a0, kMxTurbo = 0x180, kDdrMax = 0x7fffffff;
+    unsigned cpu[4] = {};
+    const unsigned ddrBefore = ddrMhz(), readBefore = readRate(cpu[0], cpu[1]);
     const unsigned before = copyRate();
     const int open = tb128fu_rpm_open();
     int cx[3] = {1, 1, 1}, mx[3] = {1, 1, 1}, ddr[2] = {1, 1};   // swen, active, sleep
@@ -1280,6 +1321,10 @@ void dvfsPrepare() {
         IOSleep(10);
     }
     const unsigned after = copyRate();
+    const unsigned ddrAfter = ddrMhz(), readAfter = readRate(cpu[2], cpu[3]);
+    snprintf(tb128fu_ddr_rows[0], sizeof tb128fu_ddr_rows[0],
+        "DDR before %u MHz read %u copy %u MiB/s cpu %u-%u | after vote %u MHz read %u copy %u MiB/s cpu %u-%u", ddrBefore,
+        readBefore, before, cpu[0], cpu[1], ddrAfter, readAfter, after, cpu[2], cpu[3]);
     const bool cxOk = !open && !cx[0] && !cx[1] && !cx[2], mxOk = cxOk && !mx[0] && !mx[1] && !mx[2];
     gTopLevel = mxOk ? kLevelCount - 1 : cxOk ? kBootLevel : 0;
     if (gTopLevel) {gPllL = kLevels[kBootLevel].l; gPllAlpha = kLevels[kBootLevel].alpha;}
@@ -1309,9 +1354,18 @@ bool setLevel(const Session &s, unsigned level) {
 // 20 windows: the level, switches and failed ones, the newest window's load, ms at each level, STAY_IN_CFA.
 void dvfsThread(void *arg, wait_result_t) {
     const Session &s = *static_cast<const Session *>(arg);
-    unsigned level = kBootLevel, quiet = 0, switches = 0, failed = 0;
+    unsigned level = kBootLevel, quiet = 0, switches = 0, failed = 0, ddrLow = ~0u, ddrHigh = 0, ddrSamples = 0;
     uint32_t levelMs[kLevelCount] = {};
     for (unsigned window = 0;; ++window) {
+        const unsigned ddr = ddrMhz();
+        if (ddr < ddrLow) ddrLow = ddr;
+        if (ddr > ddrHigh) ddrHigh = ddr;
+        ++ddrSamples;
+        if (window % 20 == 0) {
+            snprintf(tb128fu_ddr_rows[1], sizeof tb128fu_ddr_rows[1], "DDR now %u MHz | low %u high %u of %u samples, 50 ms apart",
+                ddr, ddrLow, ddrHigh, ddrSamples);
+            ddrLow = ~0u; ddrHigh = 0; ddrSamples = 0;
+        }
         unsigned busy = 0;
         for (unsigned i = 0; i < 50; ++i) {busy += (gr(s, 0x210) & 0x00fffffeu) != 0; IOSleep(1);}
         unsigned target = level;
