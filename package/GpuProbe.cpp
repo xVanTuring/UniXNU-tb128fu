@@ -1332,7 +1332,7 @@ void rpmScalingThread(void *, wait_result_t) {
     for (unsigned step = 0; step < kSteps; ++step) {
         // The switch, sleep set first as clk_smd_rpm_enable_scaling does, and only with every vote in place.
         const bool scaling = step >= kVotes;
-        if (scaling && acked != kVotes) break;
+        if (step == kVotes && acked != kVotes) break;
         const RpmClock c = scaling ? RpmClock{kClk0, 2, kEnab, 1} : kRpmClocks[step / 2];
         const uint32_t set = scaling ? (step == kVotes ? 1 : 0) : step % 2;
         snprintf(tb128fu_ddr_rows[2], sizeof tb128fu_ddr_rows[2], "RPM step %u/%u at %u s: set%u %.4s/%u %.4s=%x sending | acked %u | DDR %u MHz",
