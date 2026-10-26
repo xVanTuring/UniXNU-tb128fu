@@ -1298,17 +1298,32 @@ unsigned gTopLevel;   // the highest level the RPM votes allow; 0 keeps 320 MHz 
 // Stage 9: votes through the RPM (RpmGlink.cpp) before the GPU is powered. The votes only go up and cover every level, so the
 // governor (dvfsThread) only reprograms PLL0: CX at TURBO_NO_CPR (what 1114.8 MHz needs), MX at TURBO (two levels above what a
 // 2.23 GHz VCO needs), the DDR clock at the highest rate, each in the active and sleep sets. Without MX the top is 785 MHz,
-// without CX nothing changes. The RPM's clock scaling switch ("clk0" 2 "Enab") is not touched: Linux first votes every RPM clock
-// to its maximum before turning it on, else the RPM may slow the buses nobody voted for.
+// without CX nothing changes.
+// Then the RPM's clock scaling switch ("clk0" 2 "Enab"), as Linux's clk-smd-rpm probe does it: every RPM clock of
+// qcom,rpmcc-bengal (this tablet's rpmcc) is voted first, a rate one to INT_MAX Hz and a branch on, in both sets, so no bus
+// nobody voted for slows down when the switch turns on. While it is off the RPM keeps the boot loader's rates whatever the
+// votes say (tb128fu-088: DDR 1555 MHz before and after the BIMC vote, of 200..2092 MHz in the DT's ddr-bw-opp-table).
+struct RpmClock {uint32_t type, id, key, value;};
+constexpr uint32_t kClk0 = 0x306b6c63, kClk1 = 0x316b6c63, kClk2 = 0x326b6c63, kClka = 0x616b6c63, kCe = 0x6563, kIpa = 0x617069,
+                   kQup = 0x707571, kMmxi = 0x69786d6d, kEnab = 0x62616e45, kSwen = 0x6e657773, kKhz = 0x007a484b,
+                   kIntMaxKhz = 2147484;   // DIV_ROUND_UP(INT_MAX, 1000)
+// clk-smd-rpm.c bengal_clks: bi_tcxo, cnoc, bimc, snoc, qdss, ce1, ipa, qup, mmnrt, mmrt, snoc_periph, snoc_lpass, rf_clk1, rf_clk2.
+constexpr RpmClock kRpmClocks[] = {
+    {kClk0, 0, kEnab, 1}, {kClk1, 1, kKhz, kIntMaxKhz}, {kClk2, 0, kKhz, kIntMaxKhz}, {kClk1, 2, kKhz, kIntMaxKhz},
+    {kClk0, 1, kEnab, 1}, {kCe, 0, kKhz, kIntMaxKhz}, {kIpa, 0, kKhz, kIntMaxKhz}, {kQup, 0, kKhz, kIntMaxKhz},
+    {kMmxi, 0, kKhz, kIntMaxKhz}, {kMmxi, 1, kKhz, kIntMaxKhz}, {kClk1, 0, kKhz, kIntMaxKhz}, {kClk1, 5, kKhz, kIntMaxKhz},
+    {kClka, 4, kSwen, 1}, {kClka, 5, kSwen, 1}};
+constexpr unsigned kRpmClockCount = sizeof kRpmClocks / sizeof kRpmClocks[0];
 void dvfsPrepare() {
-    constexpr uint32_t kRwcx = 0x78637772, kRwmx = 0x786d7772, kClk2 = 0x326b6c63, kSwen = 0x6e657773, kVlvl = 0x6c766c76,
-                       kKhz = 0x007a484b;
+    constexpr uint32_t kRwcx = 0x78637772, kRwmx = 0x786d7772, kVlvl = 0x6c766c76;
     constexpr uint32_t kCxTurboNoCpr = 0x1a0, kMxTurbo = 0x180, kDdrMax = 0x7fffffff;
     unsigned cpu[4] = {};
     const unsigned ddrBefore = ddrMhz(), readBefore = readRate(cpu[0], cpu[1]);
     const unsigned before = copyRate();
     const int open = tb128fu_rpm_open();
     int cx[3] = {1, 1, 1}, mx[3] = {1, 1, 1}, ddr[2] = {1, 1};   // swen, active, sleep
+    int scaling[2] = {1, 1};   // sleep, active
+    unsigned clocks = 0;   // RPM clock votes acknowledged, of 2 x kRpmClockCount
     if (!open) {
         cx[0] = tb128fu_rpm_request(0, kRwcx, 0, kSwen, 1);
         cx[1] = tb128fu_rpm_request(0, kRwcx, 0, kVlvl, kCxTurboNoCpr);
@@ -1318,13 +1333,21 @@ void dvfsPrepare() {
         mx[2] = tb128fu_rpm_request(1, kRwmx, 0, kVlvl, kMxTurbo);
         ddr[0] = tb128fu_rpm_request(0, kClk2, 0, kKhz, kDdrMax);
         ddr[1] = tb128fu_rpm_request(1, kClk2, 0, kKhz, kDdrMax);
-        IOSleep(10);
+        for (const RpmClock &c : kRpmClocks)
+            for (uint32_t set = 0; set < 2; ++set) clocks += tb128fu_rpm_request(set, c.type, c.id, c.key, c.value) == 0;
+        // Only with every vote in place.
+        if (clocks == 2 * kRpmClockCount) {
+            scaling[0] = tb128fu_rpm_request(1, kClk0, 2, kEnab, 1);
+            scaling[1] = tb128fu_rpm_request(0, kClk0, 2, kEnab, 1);
+        }
+        IOSleep(20);
     }
     const unsigned after = copyRate();
     const unsigned ddrAfter = ddrMhz(), readAfter = readRate(cpu[2], cpu[3]);
     snprintf(tb128fu_ddr_rows[0], sizeof tb128fu_ddr_rows[0],
-        "DDR before %u MHz read %u copy %u MiB/s cpu %u-%u | after vote %u MHz read %u copy %u MiB/s cpu %u-%u", ddrBefore,
-        readBefore, before, cpu[0], cpu[1], ddrAfter, readAfter, after, cpu[2], cpu[3]);
+        "DDR %u -> %u MHz | clocks %u/%u scaling %d %d | read %u -> %u copy %u -> %u MiB/s | cpu %u-%u %u-%u", ddrBefore,
+        ddrAfter, clocks, 2 * kRpmClockCount, scaling[0], scaling[1], readBefore, readAfter, before, after, cpu[0], cpu[1],
+        cpu[2], cpu[3]);
     const bool cxOk = !open && !cx[0] && !cx[1] && !cx[2], mxOk = cxOk && !mx[0] && !mx[1] && !mx[2];
     gTopLevel = mxOk ? kLevelCount - 1 : cxOk ? kBootLevel : 0;
     if (gTopLevel) {gPllL = kLevels[kBootLevel].l; gPllAlpha = kLevels[kBootLevel].alpha;}

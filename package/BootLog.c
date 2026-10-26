@@ -125,6 +125,9 @@ extern char tb128fu_gpu_dvfs[2][120] __attribute__((weak_import));
 // The memory controller clock and read rates (GpuProbe.cpp ddrMhz, readRate); the UFS link, its clocks and read rates (Tb128fuUfs).
 extern char tb128fu_ddr_rows[2][120] __attribute__((weak_import));
 extern char native_ufs_link_rows[3][120] __attribute__((weak_import));
+// The read slots (Tb128fuUfs RootSlots.h): reads, failed, interrupts, waits that slept, longest read (us), most in flight, in
+// flight, start state (slots, interrupt attached, attach result, UTRIACR).
+extern volatile uint64_t native_ufs_slot_stats[8] __attribute__((weak_import));
 extern char native_gpu_coherence_row[120] __attribute__((weak_import));
 extern size_t boot_progress_profile_rows(char *, size_t) __attribute__((weak_import));
 extern volatile uint64_t native_gpu_idle_sleeps __attribute__((weak_import));
@@ -511,6 +514,16 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     at = put(out, at, cap, "[ufs]", 6);
     for (unsigned r = 0; r < 3; ++r)
       if (native_ufs_link_rows[r][0]) at = put(out, at, cap, native_ufs_link_rows[r], sizeof native_ufs_link_rows[r]);
+    if (&native_ufs_slot_stats) {
+      const volatile uint64_t *s = native_ufs_slot_stats;
+      char row[200];
+      snprintf(row, sizeof row,
+               "UFS slots %llu irq %llu/%02llx | reads %llu failed %llu interrupts %llu sleeps %llu | longest %llu us | in flight %llu peak %llu | utriacr %08llx",
+               (unsigned long long)(s[7] & 0xff), (unsigned long long)((s[7] >> 8) & 1), (unsigned long long)((s[7] >> 16) & 0xff),
+               (unsigned long long)s[0], (unsigned long long)s[1], (unsigned long long)s[2], (unsigned long long)s[3],
+               (unsigned long long)s[4], (unsigned long long)s[6], (unsigned long long)s[5], (unsigned long long)(s[7] >> 32));
+      at = put(out, at, cap, row, sizeof row);
+    }
   }
   // The IO-coherence proof (GpuPowerProbe coherenceProbe) and the maintenance passes it saved: map, unmap, submission, completion.
   if (&native_gpu_coherence_row && native_gpu_coherence_row[0]) {
