@@ -48,8 +48,8 @@ char tb128fu_gpu_rows[16][120];
 // level, switches, load and time at each level (dvfsThread).
 char tb128fu_gpu_dvfs[2][120];
 // The memory controller's clock and the CPU's read and copy rates before and after the DDR vote (dvfsPrepare); the clock as the
-// governor samples it, lowest and highest of each second (dvfsThread).
-char tb128fu_ddr_rows[2][120];
+// governor samples it, lowest and highest of each second (dvfsThread); the paced RPM clock votes and scaling switch (rpmScalingThread).
+char tb128fu_ddr_rows[3][120];
 int cpu_number(void);
 int tb128fu_rpm_open(void);
 int tb128fu_rpm_request(uint32_t set, uint32_t type, uint32_t id, uint32_t key, uint32_t value);
@@ -1299,10 +1299,14 @@ unsigned gTopLevel;   // the highest level the RPM votes allow; 0 keeps 320 MHz 
 // governor (dvfsThread) only reprograms PLL0: CX at TURBO_NO_CPR (what 1114.8 MHz needs), MX at TURBO (two levels above what a
 // 2.23 GHz VCO needs), the DDR clock at the highest rate, each in the active and sleep sets. Without MX the top is 785 MHz,
 // without CX nothing changes.
-// Then the RPM's clock scaling switch ("clk0" 2 "Enab"), as Linux's clk-smd-rpm probe does it: every RPM clock of
-// qcom,rpmcc-bengal (this tablet's rpmcc) is voted first, a rate one to INT_MAX Hz and a branch on, in both sets, so no bus
-// nobody voted for slows down when the switch turns on. While it is off the RPM keeps the boot loader's rates whatever the
-// votes say (tb128fu-088: DDR 1555 MHz before and after the BIMC vote, of 200..2092 MHz in the DT's ddr-bw-opp-table).
+// The RPM's clock scaling switch ("clk0" 2 "Enab") comes later (rpmScalingThread): while it is off the RPM keeps the boot
+// loader's rates whatever the votes say (tb128fu-088: DDR 1555 MHz before and after the BIMC vote, of 200..2092 MHz in the DT's
+// ddr-bw-opp-table). Linux's clk-smd-rpm probe first votes every RPM clock of qcom,rpmcc-bengal (this tablet's rpmcc), a rate
+// one to INT_MAX Hz and a branch on, in both sets, so no bus nobody voted for slows down, then turns the switch on.
+// tb128fu-089 sent all of that here, at stage 9, and the RPM stopped in rpm_err_fatal (CrashDump "TZ-rpm-wdg", lr 0x1b0b)
+// before the boot log's first slot, so which request did it is not known. The thread sends them one at a time from 300 s on,
+// after the home screen and most of the boot's reads, and each step's row reaches the log (a slot every 2 s) before its
+// request goes out, so a log that ends there names it.
 struct RpmClock {uint32_t type, id, key, value;};
 constexpr uint32_t kClk0 = 0x306b6c63, kClk1 = 0x316b6c63, kClk2 = 0x326b6c63, kClka = 0x616b6c63, kCe = 0x6563, kIpa = 0x617069,
                    kQup = 0x707571, kMmxi = 0x69786d6d, kEnab = 0x62616e45, kSwen = 0x6e657773, kKhz = 0x007a484b,
@@ -1314,6 +1318,33 @@ constexpr RpmClock kRpmClocks[] = {
     {kMmxi, 0, kKhz, kIntMaxKhz}, {kMmxi, 1, kKhz, kIntMaxKhz}, {kClk1, 0, kKhz, kIntMaxKhz}, {kClk1, 5, kKhz, kIntMaxKhz},
     {kClka, 4, kSwen, 1}, {kClka, 5, kSwen, 1}};
 constexpr unsigned kRpmClockCount = sizeof kRpmClocks / sizeof kRpmClocks[0];
+unsigned elapsedSeconds() {
+    uint64_t ns = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time(), &ns);
+    return unsigned(ns / NSEC_PER_SEC);
+}
+// Row 2 of tb128fu_ddr_rows: the step about to go out (or the last one answered), the votes acknowledged so far and the DDR clock.
+void rpmScalingThread(void *, wait_result_t) {
+    constexpr unsigned kStartSeconds = 300, kStepMs = 2500, kVotes = 2 * kRpmClockCount, kSteps = kVotes + 2;
+    while (elapsedSeconds() < kStartSeconds) IOSleep(1000);
+    unsigned acked = 0;
+    for (unsigned step = 0; step < kSteps; ++step) {
+        // The switch, sleep set first as clk_smd_rpm_enable_scaling does, and only with every vote in place.
+        const bool scaling = step >= kVotes;
+        if (scaling && acked != kVotes) break;
+        const RpmClock c = scaling ? RpmClock{kClk0, 2, kEnab, 1} : kRpmClocks[step / 2];
+        const uint32_t set = scaling ? (step == kVotes ? 1 : 0) : step % 2;
+        snprintf(tb128fu_ddr_rows[2], sizeof tb128fu_ddr_rows[2], "RPM step %u/%u at %u s: set%u %.4s/%u %.4s=%x sending | acked %u | DDR %u MHz",
+            step + 1, kSteps, elapsedSeconds(), set, reinterpret_cast<const char *>(&c.type), c.id, reinterpret_cast<const char *>(&c.key),
+            c.value, acked, ddrMhz());
+        IOSleep(kStepMs);
+        const int result = tb128fu_rpm_request(set, c.type, c.id, c.key, c.value);
+        acked += result == 0;
+        snprintf(tb128fu_ddr_rows[2], sizeof tb128fu_ddr_rows[2], "RPM step %u/%u at %u s: set%u %.4s/%u %.4s=%x -> %d | acked %u | DDR %u MHz",
+            step + 1, kSteps, elapsedSeconds(), set, reinterpret_cast<const char *>(&c.type), c.id, reinterpret_cast<const char *>(&c.key),
+            c.value, result, acked, ddrMhz());
+    }
+}
 void dvfsPrepare() {
     constexpr uint32_t kRwcx = 0x78637772, kRwmx = 0x786d7772, kVlvl = 0x6c766c76;
     constexpr uint32_t kCxTurboNoCpr = 0x1a0, kMxTurbo = 0x180, kDdrMax = 0x7fffffff;
@@ -1322,8 +1353,6 @@ void dvfsPrepare() {
     const unsigned before = copyRate();
     const int open = tb128fu_rpm_open();
     int cx[3] = {1, 1, 1}, mx[3] = {1, 1, 1}, ddr[2] = {1, 1};   // swen, active, sleep
-    int scaling[2] = {1, 1};   // sleep, active
-    unsigned clocks = 0;   // RPM clock votes acknowledged, of 2 x kRpmClockCount
     if (!open) {
         cx[0] = tb128fu_rpm_request(0, kRwcx, 0, kSwen, 1);
         cx[1] = tb128fu_rpm_request(0, kRwcx, 0, kVlvl, kCxTurboNoCpr);
@@ -1333,21 +1362,15 @@ void dvfsPrepare() {
         mx[2] = tb128fu_rpm_request(1, kRwmx, 0, kVlvl, kMxTurbo);
         ddr[0] = tb128fu_rpm_request(0, kClk2, 0, kKhz, kDdrMax);
         ddr[1] = tb128fu_rpm_request(1, kClk2, 0, kKhz, kDdrMax);
-        for (const RpmClock &c : kRpmClocks)
-            for (uint32_t set = 0; set < 2; ++set) clocks += tb128fu_rpm_request(set, c.type, c.id, c.key, c.value) == 0;
-        // Only with every vote in place.
-        if (clocks == 2 * kRpmClockCount) {
-            scaling[0] = tb128fu_rpm_request(1, kClk0, 2, kEnab, 1);
-            scaling[1] = tb128fu_rpm_request(0, kClk0, 2, kEnab, 1);
-        }
-        IOSleep(20);
+        IOSleep(10);
+        thread_t thread = nullptr;
+        if (kernel_thread_start(rpmScalingThread, nullptr, &thread) == KERN_SUCCESS) thread_deallocate(thread);
     }
     const unsigned after = copyRate();
     const unsigned ddrAfter = ddrMhz(), readAfter = readRate(cpu[2], cpu[3]);
     snprintf(tb128fu_ddr_rows[0], sizeof tb128fu_ddr_rows[0],
-        "DDR %u -> %u MHz | clocks %u/%u scaling %d %d | read %u -> %u copy %u -> %u MiB/s | cpu %u-%u %u-%u", ddrBefore,
-        ddrAfter, clocks, 2 * kRpmClockCount, scaling[0], scaling[1], readBefore, readAfter, before, after, cpu[0], cpu[1],
-        cpu[2], cpu[3]);
+        "DDR before %u MHz read %u copy %u MiB/s cpu %u-%u | after vote %u MHz read %u copy %u MiB/s cpu %u-%u", ddrBefore,
+        readBefore, before, cpu[0], cpu[1], ddrAfter, readAfter, after, cpu[2], cpu[3]);
     const bool cxOk = !open && !cx[0] && !cx[1] && !cx[2], mxOk = cxOk && !mx[0] && !mx[1] && !mx[2];
     gTopLevel = mxOk ? kLevelCount - 1 : cxOk ? kBootLevel : 0;
     if (gTopLevel) {gPllL = kLevels[kBootLevel].l; gPllAlpha = kLevels[kBootLevel].alpha;}

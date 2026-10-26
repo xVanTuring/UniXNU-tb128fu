@@ -123,7 +123,7 @@ extern char tb128fu_usb_rows[5][120] __attribute__((weak_import));
 extern void tb128fu_usb_log_put(const void *data, size_t length) __attribute__((weak_import));
 extern char tb128fu_gpu_dvfs[2][120] __attribute__((weak_import));
 // The memory controller clock and read rates (GpuProbe.cpp ddrMhz, readRate); the UFS link, its clocks and read rates (Tb128fuUfs).
-extern char tb128fu_ddr_rows[2][120] __attribute__((weak_import));
+extern char tb128fu_ddr_rows[3][120] __attribute__((weak_import));
 extern char native_ufs_link_rows[3][120] __attribute__((weak_import));
 // The read slots (Tb128fuUfs RootSlots.h): reads, failed, interrupts, waits that slept, longest read (us), most in flight, in
 // flight, start state (slots, interrupt attached, attach result, UTRIACR).
@@ -508,7 +508,7 @@ static size_t compose(char *out, size_t cap, uint32_t slot, unsigned now) {
     for (unsigned r = 0; r < 2; ++r)
       if (tb128fu_gpu_dvfs[r][0]) at = put(out, at, cap, tb128fu_gpu_dvfs[r], sizeof tb128fu_gpu_dvfs[r]);
   if (&tb128fu_ddr_rows)
-    for (unsigned r = 0; r < 2; ++r)
+    for (unsigned r = 0; r < 3; ++r)
       if (tb128fu_ddr_rows[r][0]) at = put(out, at, cap, tb128fu_ddr_rows[r], sizeof tb128fu_ddr_rows[r]);
   if (&native_ufs_link_rows && native_ufs_link_rows[0][0]) {
     at = put(out, at, cap, "[ufs]", 6);
