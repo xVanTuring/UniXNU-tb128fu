@@ -18,8 +18,10 @@ into it.
 | --- | --- |
 | Firmware, UniXNU menu, DarwinBoot | Works; `fastboot flash boot_a` + reboot (the ABL `fastboot boot` buffer is too small) |
 | XNU and the root | iPadOS 17.7.11 (21H461) kernel on the 8 cores (4× Cortex-A53, 4× Cortex-A73); the verified OS/SystemOS root and the Data volume on UFS (NativeUfs SM6225) |
+| Storage speed | UFS link at HS-G3 rate B, 2 lanes each way (the boot loader leaves TX on one; the driver widens it); eight reads in flight on the completion interrupt; a single 128 KiB read stream 273 MiB/s (was 187) |
 | Interrupts and timer | GICv3; the EL1 virtual timer is INTID 19 here; SGIs do not arrive, so the IPIs are software-pended SPIs 504..511 |
 | CPU frequency | Both clusters at their top level (1.9 / 2.4 GHz) |
+| DDR | 2096 MHz, the top of the DT's table (the boot loader leaves 1555): every RPM clock voted to its top, then the RPM's clock scaling switched on |
 | Display | The home screen appears 70–95 s after boot; QuartzCore draws on the CPU into the firmware frame buffer (1200×2000) |
 | Touch | Himax HX83102E on QUP SE0 SPI; the kernel downloads the zero-flash firmware and publishes events through NativeHidInput |
 | GPU | Adreno 610 powered at 320 MHz, its SMMU context, zap shader, CP, interrupt and NativeAdreno published; the user-client path passes its self test. The Metal user space (Turnip, metal2vulkan, plugin) is not built for it yet |
