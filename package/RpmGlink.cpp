@@ -238,9 +238,12 @@ int tb128fu_rpm_open(void) {
         g.tocCount = rd(toc + 4);
         for (uint32_t i = 0; i < g.tocCount && i < (kTocSize - 8) / 12; ++i) {
             const uint32_t id = rd(toc + 8 + 12 * i), offset = rd(toc + 12 + 12 * i), size = rd(toc + 16 + 12 * i);
-            if (offset >= kMsgRamSize || size > kMsgRamSize - offset || size < 16) continue;
-            if (id == kTxFifoId) {g.tx = offset; g.txLength = size - 8;}
-            if (id == kRxFifoId) {g.rx = offset; g.rxLength = size - 8;}
+            // The size is the data's alone, after the tail and head words (qcom_glink_rpm.c: native.length = size, fifo at
+            // offset + 8). tb128fu-089..092 took 8 bytes off it, wrapped 8 bytes early, and the first request that crossed the
+            // end (the 31st) left the RPM a misplaced message: rpm_err_fatal, whichever request it was.
+            if (offset >= kMsgRamSize || size < 8 || size > kMsgRamSize - offset - 8) continue;
+            if (id == kTxFifoId) {g.tx = offset; g.txLength = size;}
+            if (id == kRxFifoId) {g.rx = offset; g.rxLength = size;}
         }
         if (!g.txLength || !g.rxLength || (g.txLength & 7) || (g.rxLength & 7)) {status = -3; break;}
         g.before[0] = rd(g.tx + 4); g.before[1] = rd(g.tx); g.before[2] = rd(g.rx + 4); g.before[3] = rd(g.rx);

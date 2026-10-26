@@ -1304,20 +1304,20 @@ unsigned gTopLevel;   // the highest level the RPM votes allow; 0 keeps 320 MHz 
 // ddr-bw-opp-table). Linux's clk-smd-rpm probe first votes every RPM clock of qcom,rpmcc-bengal (this tablet's rpmcc), a rate
 // one to INT_MAX Hz and a branch on, in both sets, so no bus nobody voted for slows down, then turns the switch on.
 // tb128fu-089 sent all of that here, at stage 9, and the RPM stopped in rpm_err_fatal (CrashDump "TZ-rpm-wdg", lr 0x1b0b)
-// before the boot log's first slot, so which request did it is not known. The thread sends them one at a time from 300 s on,
-// after the home screen and most of the boot's reads, and each step's row reaches the log (a slot every 2 s) before its
-// request goes out, so a log that ends there names it.
+// before the boot log's first slot. The thread sends them one at a time from 300 s on, after the home screen and most of the
+// boot's reads, and each step's row reaches the log (a slot every 2 s) before its request goes out, so a log that ends there
+// names it: tb128fu-090..092 all ended at the 31st request (the 23rd step), whatever it was, the first to cross the end of the
+// FIFO, which RpmGlink.cpp placed 8 bytes early.
 struct RpmClock {uint32_t type, id, key, value;};
-constexpr uint32_t kClk0 = 0x306b6c63, kClk1 = 0x316b6c63, kClk2 = 0x326b6c63, kCe = 0x6563, kIpa = 0x617069,
+constexpr uint32_t kClk0 = 0x306b6c63, kClk1 = 0x316b6c63, kClk2 = 0x326b6c63, kClka = 0x616b6c63, kCe = 0x6563, kIpa = 0x617069,
                    kQup = 0x707571, kMmxi = 0x69786d6d, kEnab = 0x62616e45, kSwen = 0x6e657773, kKhz = 0x007a484b,
                    kIntMaxKhz = 2147484;   // DIV_ROUND_UP(INT_MAX, 1000)
-// clk-smd-rpm.c bengal_clks: bi_tcxo, cnoc, bimc, snoc, qdss, ce1, ipa, qup, mmnrt, mmrt, snoc_periph. Not snoc_lpass ("clk1" 5)
-// nor the XO buffers rf_clk1 and rf_clk2 ("clka" 4, 5): tb128fu-090 and -091 had the 22 votes before each acknowledged, and its
-// active-set vote stopped the RPM in rpm_err_fatal. Neither the LPASS nor a radio runs on this board.
+// clk-smd-rpm.c bengal_clks: bi_tcxo, cnoc, bimc, snoc, qdss, ce1, ipa, qup, mmnrt, mmrt, snoc_periph, snoc_lpass, rf_clk1, rf_clk2.
 constexpr RpmClock kRpmClocks[] = {
     {kClk0, 0, kEnab, 1}, {kClk1, 1, kKhz, kIntMaxKhz}, {kClk2, 0, kKhz, kIntMaxKhz}, {kClk1, 2, kKhz, kIntMaxKhz},
     {kClk0, 1, kEnab, 1}, {kCe, 0, kKhz, kIntMaxKhz}, {kIpa, 0, kKhz, kIntMaxKhz}, {kQup, 0, kKhz, kIntMaxKhz},
-    {kMmxi, 0, kKhz, kIntMaxKhz}, {kMmxi, 1, kKhz, kIntMaxKhz}, {kClk1, 0, kKhz, kIntMaxKhz}};
+    {kMmxi, 0, kKhz, kIntMaxKhz}, {kMmxi, 1, kKhz, kIntMaxKhz}, {kClk1, 0, kKhz, kIntMaxKhz}, {kClk1, 5, kKhz, kIntMaxKhz},
+    {kClka, 4, kSwen, 1}, {kClka, 5, kSwen, 1}};
 constexpr unsigned kRpmClockCount = sizeof kRpmClocks / sizeof kRpmClocks[0];
 unsigned elapsedSeconds() {
     uint64_t ns = 0;
@@ -1345,6 +1345,12 @@ void rpmScalingThread(void *, wait_result_t) {
             step + 1, kSteps, elapsedSeconds(), set, reinterpret_cast<const char *>(&c.type), c.id, reinterpret_cast<const char *>(&c.key),
             c.value, result, acked, ddrMhz());
     }
+    // What the switch changed: the clock, and the CPU's read and copy rates as dvfsPrepare measured them before the votes.
+    IOSleep(100);
+    unsigned first = 0, last = 0;
+    const unsigned read = readRate(first, last), copy = copyRate();
+    snprintf(tb128fu_ddr_rows[2], sizeof tb128fu_ddr_rows[2], "RPM scaling done at %u s: acked %u of %u | DDR %u MHz | read %u copy %u MiB/s cpu %u-%u",
+        elapsedSeconds(), acked, kSteps, ddrMhz(), read, copy, first, last);
 }
 void dvfsPrepare() {
     constexpr uint32_t kRwcx = 0x78637772, kRwmx = 0x786d7772, kVlvl = 0x6c766c76;
