@@ -1308,17 +1308,16 @@ unsigned gTopLevel;   // the highest level the RPM votes allow; 0 keeps 320 MHz 
 // after the home screen and most of the boot's reads, and each step's row reaches the log (a slot every 2 s) before its
 // request goes out, so a log that ends there names it.
 struct RpmClock {uint32_t type, id, key, value;};
-constexpr uint32_t kClk0 = 0x306b6c63, kClk1 = 0x316b6c63, kClk2 = 0x326b6c63, kClka = 0x616b6c63, kCe = 0x6563, kIpa = 0x617069,
+constexpr uint32_t kClk0 = 0x306b6c63, kClk1 = 0x316b6c63, kClk2 = 0x326b6c63, kCe = 0x6563, kIpa = 0x617069,
                    kQup = 0x707571, kMmxi = 0x69786d6d, kEnab = 0x62616e45, kSwen = 0x6e657773, kKhz = 0x007a484b,
                    kIntMaxKhz = 2147484;   // DIV_ROUND_UP(INT_MAX, 1000)
-// clk-smd-rpm.c bengal_clks: bi_tcxo, cnoc, bimc, snoc, qdss, ce1, ipa, qup, mmnrt, mmrt, snoc_periph, rf_clk1, rf_clk2. Not
-// snoc_lpass ("clk1" 5): tb128fu-090 acknowledged the 22 votes before it, and its active-set vote stopped the RPM in
-// rpm_err_fatal (the LPASS, whose bus it is, is not started here).
+// clk-smd-rpm.c bengal_clks: bi_tcxo, cnoc, bimc, snoc, qdss, ce1, ipa, qup, mmnrt, mmrt, snoc_periph. Not snoc_lpass ("clk1" 5)
+// nor the XO buffers rf_clk1 and rf_clk2 ("clka" 4, 5): tb128fu-090 and -091 had the 22 votes before each acknowledged, and its
+// active-set vote stopped the RPM in rpm_err_fatal. Neither the LPASS nor a radio runs on this board.
 constexpr RpmClock kRpmClocks[] = {
     {kClk0, 0, kEnab, 1}, {kClk1, 1, kKhz, kIntMaxKhz}, {kClk2, 0, kKhz, kIntMaxKhz}, {kClk1, 2, kKhz, kIntMaxKhz},
     {kClk0, 1, kEnab, 1}, {kCe, 0, kKhz, kIntMaxKhz}, {kIpa, 0, kKhz, kIntMaxKhz}, {kQup, 0, kKhz, kIntMaxKhz},
-    {kMmxi, 0, kKhz, kIntMaxKhz}, {kMmxi, 1, kKhz, kIntMaxKhz}, {kClk1, 0, kKhz, kIntMaxKhz},
-    {kClka, 4, kSwen, 1}, {kClka, 5, kSwen, 1}};
+    {kMmxi, 0, kKhz, kIntMaxKhz}, {kMmxi, 1, kKhz, kIntMaxKhz}, {kClk1, 0, kKhz, kIntMaxKhz}};
 constexpr unsigned kRpmClockCount = sizeof kRpmClocks / sizeof kRpmClocks[0];
 unsigned elapsedSeconds() {
     uint64_t ns = 0;
